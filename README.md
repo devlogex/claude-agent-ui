@@ -22,7 +22,7 @@ The server only listens on `127.0.0.1`. Every run bypasses permission prompts, s
 |---|---|---|
 | `port` | `3000` | HTTP port (always bound to 127.0.0.1) |
 | `starterPrompt` | `Start your task.` | Prompt sent to every run; agents gather their own context |
-| `defaultCwd` | `~/Workspace` | Pre-filled working directory |
+| `defaultCwd` | `~/Workspace/parcel-perform` | Pre-filled working directory |
 | `claudeBin` | `claude` | Path to the Claude Code CLI |
 | `pollIntervalMs` | `3000` | Runs panel refresh while something is running |
 
