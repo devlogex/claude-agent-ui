@@ -21,7 +21,7 @@ export function loadConfig(): AppConfig {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const raw = JSON.parse(readFileSync(path.join(root, "config.json"), "utf8"));
   return {
-    port: Number(raw.port ?? 4317),
+    port: Number(raw.port ?? 3000),
     starterPrompt: String(raw.starterPrompt ?? "Start your task."),
     defaultCwd: expandHome(String(raw.defaultCwd ?? "~")),
     claudeBin: String(raw.claudeBin ?? "claude"),

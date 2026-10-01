@@ -10,7 +10,7 @@ A local web page to browse, create, edit and run Claude Code agents.
 
 ```sh
 npm install
-npm start          # http://127.0.0.1:4317
+npm start          # http://127.0.0.1:3000
 npm run restart    # stop the running server and start it in the background (logs: ~/.claude-agent-ui/server.log)
 ```
 
@@ -20,7 +20,7 @@ The server only listens on `127.0.0.1`. Every run bypasses permission prompts, s
 
 | Key | Default | Meaning |
 |---|---|---|
-| `port` | `4317` | HTTP port (always bound to 127.0.0.1) |
+| `port` | `3000` | HTTP port (always bound to 127.0.0.1) |
 | `starterPrompt` | `Start your task.` | Prompt sent to every run; agents gather their own context |
 | `defaultCwd` | `~/Workspace` | Pre-filled working directory |
 | `claudeBin` | `claude` | Path to the Claude Code CLI |

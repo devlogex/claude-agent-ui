@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).port ?? 4317))' "$ROOT/config.json")"
+PORT="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).port ?? 3000))' "$ROOT/config.json")"
 LOG_DIR="$HOME/.claude-agent-ui"
 LOG="$LOG_DIR/server.log"
 
