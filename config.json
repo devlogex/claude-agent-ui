@@ -1,0 +1,7 @@
+{
+  "port": 4317,
+  "starterPrompt": "Start your task.",
+  "defaultCwd": "~/Workspace",
+  "claudeBin": "claude",
+  "pollIntervalMs": 3000
+}

@@ -1,0 +1,27 @@
+{
+  "name": "claude-agent-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web UI to browse, edit and run Claude Code agents as background sessions",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "restart": "bash scripts/restart.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

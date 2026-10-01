@@ -1,0 +1,79 @@
+:root {
+  --bg: #f6f6f4;
+  --panel: #ffffff;
+  --text: #1f1f1d;
+  --muted: #6b6b66;
+  --border: #deded8;
+  --accent: #c15f3c;
+  --danger: #b3261e;
+  --ok: #2e7d32;
+  --warn: #9a6700;
+  --code-bg: #f0efea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1a;
+    --panel: #242423;
+    --text: #ecebe6;
+    --muted: #a3a29c;
+    --border: #3a3a37;
+    --accent: #e0825f;
+    --danger: #f2877e;
+    --ok: #81c784;
+    --warn: #e3b341;
+    --code-bg: #2f2f2d;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+code, textarea, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.topbar h1 { font-size: 17px; margin: 0; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.panel-head h2 { font-size: 15px; margin: 0; }
+input, textarea {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text);
+}
+.cwd-label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+.check-label { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.check-label input { width: auto; }
+.note { margin: 10px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--code-bg); border-radius: 4px; color: var(--muted); }
+.btn {
+  padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text); cursor: pointer; font: inherit;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.badge.danger { color: var(--danger); border-color: var(--danger); }
+.badge.running { color: var(--warn); border-color: var(--warn); }
+.badge.finished { color: var(--ok); border-color: var(--ok); }
+.group-title { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.card { border: 1px solid var(--border); border-radius: 6px; padding: 9px 10px; margin-bottom: 6px; }
+.card-head { display: flex; align-items: center; gap: 8px; }
+.card-head .name { font-weight: 600; overflow-wrap: anywhere; }
+.card-head .spacer, .spacer { flex: 1; }
+.card .desc { color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+.card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.card .prompt { margin-top: 8px; resize: vertical; }
+.error { color: var(--danger); white-space: pre-wrap; margin: 6px 0 0; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.run-meta { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+.final { margin-top: 6px; }
+.final pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code-bg); padding: 8px; border-radius: 6px; margin: 6px 0 0; max-height: 320px; overflow: auto; }
+.attach { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+dialog { width: min(900px, calc(100vw - 32px)); border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); padding: 14px; }
+dialog::backdrop { background: rgba(0, 0, 0, .4); }
+#editor-content { height: min(60vh, 560px); resize: vertical; }
+.editor-actions { display: flex; gap: 8px; margin-top: 10px; }

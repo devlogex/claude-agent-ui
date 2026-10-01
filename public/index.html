@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Agent UI</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Claude Agent UI</h1>
+    <span class="badge danger" title="Runs start with --dangerously-skip-permissions">permissions bypassed</span>
+  </header>
+
+  <main class="layout">
+    <section class="panel" id="agents-panel">
+      <div class="panel-head">
+        <h2>Agents</h2>
+        <button id="new-agent" class="btn">New agent</button>
+      </div>
+      <input id="filter" type="search" placeholder="Filter by name or description" />
+      <label class="cwd-label" for="cwd">Working directory for runs</label>
+      <input id="cwd" list="recent-cwds" spellcheck="false" placeholder="/absolute/path or ~/path" />
+      <datalist id="recent-cwds"></datalist>
+      <label class="check-label"><input type="checkbox" id="unattended" checked /> Unattended: the agent can't ask questions; if blocked it reports <code>BLOCKED:</code> and ends the run</label>
+      <p class="note">
+        Each run is a separate background Claude session (<code>claude --bg</code>). Background subagents
+        and background shell commands run to completion. A finished session stays open (idle) until you
+        Stop or Remove it, and you can <code>claude attach</code> to continue it.
+      </p>
+      <div id="agent-list"></div>
+    </section>
+
+    <section class="panel" id="runs-panel">
+      <div class="panel-head">
+        <h2>Runs</h2>
+        <button id="stop-finished" class="btn">Stop all finished</button>
+      </div>
+      <div id="run-list"><p class="muted">No runs yet.</p></div>
+    </section>
+  </main>
+
+  <dialog id="editor">
+    <form method="dialog" id="editor-form">
+      <div class="panel-head">
+        <h2 id="editor-title">Agent</h2>
+        <span id="editor-readonly" class="badge" hidden>read-only (plugin)</span>
+      </div>
+      <textarea id="editor-content" spellcheck="false"></textarea>
+      <p id="editor-error" class="error" hidden></p>
+      <div class="editor-actions">
+        <button type="button" id="editor-copy" class="btn" hidden>Copy to global</button>
+        <span class="spacer"></span>
+        <button type="button" id="editor-cancel" class="btn">Close</button>
+        <button type="button" id="editor-save" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
