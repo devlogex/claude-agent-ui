@@ -3,7 +3,7 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 import { createTask, getConfig, listAgents, queryKeys, type PermissionMode, type TaskView } from "../lib/api.ts";
 import { PRIORITY_LEVELS } from "../lib/taskStatus.ts";
-import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { PermissionModeField } from "./PermissionModeField.tsx";
 import { errorMessage } from "./States.tsx";
 import { Button } from "./ui/button.tsx";
 import { Dialog, DialogPanel } from "./ui/dialog.tsx";
@@ -16,20 +16,6 @@ const TITLE_LIMIT = 80;
 
 /** The footer buttons live outside the <form>, so the submit button reaches it by id. */
 const FORM_ID = "new-task-form";
-
-/**
- * Whether this session has already read the bypass explanation.
- *
- * The *confirmation* is remembered; the *choice* is not. The permission switch is off by
- * default on every new task regardless of this flag — what the flag saves is re-reading the
- * same paragraph, never the deliberate act of turning it on.
- */
-let bypassExplained = false;
-
-/** Test seam: each test needs the first-time path. */
-export function resetBypassExplanation() {
-  bypassExplained = false;
-}
 
 export interface NewTaskDialogProps {
   open: boolean;
@@ -48,13 +34,13 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
   const [cwd, setCwd] = useState("");
   const [priority, setPriority] = useState(0);
   const [unattended, setUnattended] = useState(true);
+  // Hardcoded, never seeded from `config.permissionMode`. A queued task has nobody there to
+  // answer, so it must not inherit a global bypass — see the M4 contract on POST /api/tasks.
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("ask");
-  const [confirmingBypass, setConfirmingBypass] = useState(false);
 
   // Fill the two defaults the server would apply anyway, so they are visible and editable
-  // rather than a surprise applied after submit. `permissionMode` is deliberately NOT read
-  // from config: a queued task has nobody there to answer, so it never inherits a global
-  // bypass. `ask` is hardcoded above and stays that way.
+  // rather than a surprise applied after submit. Note which two: `permissionMode` is not one
+  // of them, and must never become one.
   const { defaultCwd, starterPrompt } = config.data ?? {};
   useEffect(() => {
     if (!open) return;
@@ -79,7 +65,6 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
     setPriority(0);
     setUnattended(true);
     setPermissionMode("ask");
-    setConfirmingBypass(false);
     setCwd("");
     setPrompt("");
     create.reset();
@@ -104,22 +89,8 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
     });
   }
 
-  /** Turning the switch *on* must not commit until the explanation has been read. */
-  function handlePermissionToggle(checked: boolean) {
-    if (!checked) {
-      setPermissionMode("ask");
-      return;
-    }
-    if (bypassExplained) {
-      setPermissionMode("bypassPermissions");
-      return;
-    }
-    setConfirmingBypass(true);
-  }
-
   const derivedTitle = prompt.split("\n").find((l) => l.trim())?.trim().slice(0, TITLE_LIMIT) ?? "";
   const promptTooLong = prompt.length > PROMPT_LIMIT;
-  const bypassing = permissionMode === "bypassPermissions";
 
   return (
     <>
@@ -265,9 +236,13 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
             </Field>
 
             {/*
-              Two switches with a rule between them, never worded as one idea. `unattended`
+              Two controls with a rule between them, never worded as one idea. `unattended`
               governs *questions*; `permissionMode` governs *tool permissions*. An unattended
               task can still park on a permission prompt — that is what Needs permission is for.
+
+              The permission control is PermissionModeField rather than a second switch: it is
+              the one piece of wording the CEO's decision names verbatim, and two
+              implementations of the most dangerous control in the product is one too many.
             */}
             <div className="flex flex-col gap-4 border-t border-border pt-4">
               <Switch
@@ -276,51 +251,17 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
                 label="Run unattended"
                 help="The agent will not stop to ask you questions. Recommended for queued work, since nobody is watching it run."
               />
-              <Switch
-                checked={bypassing}
-                onCheckedChange={handlePermissionToggle}
-                label="Skip permission prompts"
-                // No recommendation either way, and no colour drawing the eye to it.
-                help={
-                  bypassing
-                    ? "On — the agent will use tools without asking."
-                    : "Off — the agent asks before each tool it uses."
-                }
+              <PermissionModeField
+                value={permissionMode}
+                onChange={setPermissionMode}
+                cwd={cwd}
+                name="new-task-permission-mode"
               />
             </div>
           </form>
         </DialogPanel>
       </Dialog>
 
-      {/*
-        Guards the change rather than a button: the switch does not commit until the paragraph
-        has been read. "Keep asking me" is the focused default, and cancelling leaves it off.
-      */}
-      <ConfirmDialog
-        open={confirmingBypass}
-        onOpenChange={setConfirmingBypass}
-        title="Let this task use tools without asking?"
-        description={
-          <>
-            <span className="block">
-              The agent will run commands, edit files and use tools in{" "}
-              <span className="font-mono text-xs text-fg">{cwd || "the working directory"}</span> without stopping to
-              ask you first. That includes deleting and overwriting files. It runs with your user account and your
-              permissions.
-            </span>
-            <span className="mt-2 block">
-              Leave this off unless you have read the prompt and you are willing to let it run unattended in that
-              directory.
-            </span>
-          </>
-        }
-        cancelLabel="Keep asking me"
-        confirmLabel="Skip permission prompts"
-        onConfirm={() => {
-          bypassExplained = true;
-          setPermissionMode("bypassPermissions");
-        }}
-      />
     </>
   );
 }

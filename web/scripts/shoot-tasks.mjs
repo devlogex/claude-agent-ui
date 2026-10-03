@@ -65,7 +65,7 @@ await capture("t06-permission-confirm-dark", {
   before: async (p) => {
     await p.getByRole("button", { name: "New task" }).click();
     await p.waitForTimeout(300);
-    await p.getByRole("switch", { name: "Skip permission prompts" }).click();
+    await p.getByRole("radio", { name: /Bypass permission prompts/ }).click();
   },
 });
 await capture("t07-permission-confirm-light", {
@@ -73,7 +73,7 @@ await capture("t07-permission-confirm-light", {
   before: async (p) => {
     await p.getByRole("button", { name: "New task" }).click();
     await p.waitForTimeout(300);
-    await p.getByRole("switch", { name: "Skip permission prompts" }).click();
+    await p.getByRole("radio", { name: /Bypass permission prompts/ }).click();
   },
 });
 
@@ -111,6 +111,13 @@ await capture("t14-focus-row-cancel-dark", {
 // --- Responsive --------------------------------------------------------------------------
 await capture("t15-tasks-mobile-dark", { width: 390, height: 844 });
 await capture("t16-detail-mobile-light", { theme: "light", url: "/tasks/t-91a2", width: 390, height: 844 });
+
+// --- The states a screenshot of the happy path never catches ------------------------------
+// These need the mock restarted with a different scenario; `--states` runs only this block.
+if (process.argv.includes("--states")) {
+  await capture("t17-tasks-empty-dark", {});
+  await capture("t18-tasks-empty-light", { theme: "light" });
+}
 
 console.log(`\n${allErrors.length ? `${allErrors.length} console errors:\n${allErrors.join("\n")}` : "no console errors"}`);
 await browser.close();

@@ -156,8 +156,13 @@ describe("StatusBar", () => {
 
     expect(await screen.findByText("Needs input")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("1 run needing input");
-    // A waiting run is not counted as running.
-    expect(screen.getByText("Running").nextElementSibling).toHaveTextContent("1");
+    // A waiting run *is* counted as running — reversed from M2, deliberately.
+    //
+    // It holds its concurrency slot and has not finished, which is exactly what
+    // `stats.waiting ⊂ stats.running` means server-side. Excluding it here made the bar read
+    // "Running 1" while the Tasks screen's own Running group read 2, on the same screen at the
+    // same moment. "Needs input" is the subset callout, not a sibling: never add the two.
+    expect(screen.getByText("Running").nextElementSibling).toHaveTextContent("2");
   });
 
   it("announces both counters as one sentence rather than two bare numbers", async () => {
