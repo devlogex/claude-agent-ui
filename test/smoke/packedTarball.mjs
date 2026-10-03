@@ -134,18 +134,19 @@ try {
     readdirSync(packDir).find((f) => f.endsWith(".tgz")),
   );
 
-  // Anything outside dist/ in the tarball is either npm's own (it always adds these two) or a
-  // leak. Asserted here rather than by eye, because the next person to touch `files` will not
-  // think to look.
+  // Anything outside dist/ in the tarball is either npm's own or a leak. npm adds package.json,
+  // README and LICENSE whatever `files` says, so those three are not strays. Asserted here rather
+  // than by eye, because the next person to touch `files` will not think to look.
+  const ALWAYS_PACKED = new Set(["package.json", "README.md", "LICENSE"]);
   const listing = (await run("tar", ["-tzf", tarball]))
     .split("\n")
     .map((l) => l.replace(/^package\//, "").trim())
     .filter((l) => l && !l.endsWith("/"));
-  const strays = listing.filter((f) => !f.startsWith("dist/") && f !== "package.json" && f !== "README.md");
+  const strays = listing.filter((f) => !f.startsWith("dist/") && !ALWAYS_PACKED.has(f));
   if (strays.length > 0) throw new Error(`the tarball ships files outside dist/: ${strays.join(", ")}`);
   if (!listing.includes("dist/cli.js")) throw new Error("the tarball has no dist/cli.js, which is the bin entry");
   if (!listing.includes("dist/web/index.html")) throw new Error("the tarball has no built client at dist/web");
-  log(`     ${listing.length} files, all under dist/`);
+  log(`     ${listing.length} files, nothing outside dist/ but the three npm always packs`);
 
   log("3/5  installing into an empty directory");
   const host = path.join(tmp, "host");
