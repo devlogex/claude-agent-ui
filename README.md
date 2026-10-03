@@ -251,6 +251,18 @@ audit, `check:contrast` for the token pairs, and `shoot-demo.mjs` for the GIF ab
 against `web/scripts/mock-api.mjs`, which speaks the same wire format as the real server with
 entirely synthetic content. None of them ship.
 
+### Releasing
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes with
+`--provenance --access public --tag latest`. Nobody publishes from a laptop, and not only as a
+policy: npm can mint a provenance attestation **only** from GitHub Actions or GitLab CI, where it
+can attest which commit and which workflow built the tarball. Run by hand, `npm publish
+--provenance` fails with `Automatic provenance generation not supported for provider: <none>`.
+
+The workflow refuses to publish if the tag disagrees with `package.json`, or if `repository` is
+missing or names a different repo — provenance binds the tarball to a source repository, so that
+field has to be right before the first release.
+
 ## Licence
 
 MIT

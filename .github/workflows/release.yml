@@ -1,0 +1,76 @@
+name: Release
+
+# Publishing is deliberately not something a laptop can do, and not only as a policy: npm can
+# only mint a provenance attestation from GitHub Actions or GitLab CI, where it can prove which
+# commit and which workflow built the tarball. `npm publish --provenance` run by hand fails with
+# "Automatic provenance generation not supported for provider: <none>". So the tag is the trigger
+# and this file is the only publisher.
+on:
+  push:
+    tags: ["v*"]
+  # For a re-run after a transient registry failure. The tag still decides the version.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+  # What mints the provenance attestation. Without it npm fails with
+  # 'Provenance generation in GitHub Actions requires "write" access to the "id-token" permission'.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # npm matches the attestation against this, and refuses the publish if it disagrees.
+    environment: npm-publish
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+          # Required for NODE_AUTH_TOKEN below to be used at all.
+          registry-url: "https://registry.npmjs.org"
+
+      # A tag that disagrees with package.json publishes a version nobody asked for, under a name
+      # that says otherwise. Cheaper to catch here than to deprecate afterwards.
+      - name: Tag must match package.json
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          pkg="v$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "Tag $tag does not match package.json $pkg. Fix one of them and re-tag." >&2
+            exit 1
+          fi
+          echo "Publishing $pkg"
+
+      # Provenance binds the tarball to a source repository, so npm requires package.json to name
+      # one and to agree with the repository being built here.
+      - name: package.json must name this repository
+        run: |
+          url="$(node -p 'require("./package.json").repository?.url ?? ""')"
+          case "$url" in
+            *"${{ github.repository }}"*) echo "repository: $url" ;;
+            "") echo "package.json has no \"repository\" field; provenance cannot be generated." >&2; exit 1 ;;
+            *) echo "package.json repository ($url) is not ${{ github.repository }}." >&2; exit 1 ;;
+          esac
+
+      - run: npm ci
+      - run: npm --prefix web ci
+
+      # `npm publish` runs prepublishOnly, which is typecheck + both test suites + the build. The
+      # tarball is therefore built here, from this commit, which is the whole point of provenance.
+      - name: Publish
+        run: npm publish --provenance --access public --tag latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
