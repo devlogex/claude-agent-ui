@@ -135,7 +135,13 @@ export function TasksPage() {
 
   function handleCreated(task: TaskView) {
     setHighlightId(task.id);
-    announceAction(`Queued "${task.title}".`, task.id);
+    // Written straight to the region, with no precedence claim — `announceAction` would be wrong
+    // here. Precedence exists for the case where the differ is about to retell the *same* event
+    // more thinly, and a brand-new id has no such retelling: the differ only reports labels that
+    // *changed*, and a task appearing changed nothing. So the claim would buy nothing and cost
+    // the next event, which on a free slot is this task starting a moment later — leaving the
+    // region saying it was queued and never saying it ran.
+    setAnnouncement({ text: `Queued "${task.title}".`, taskId: null, at: Date.now() });
   }
 
   return (

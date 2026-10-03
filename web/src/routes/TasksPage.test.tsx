@@ -54,6 +54,33 @@ const OTHER: TaskView = {
   attachCommand: "claude attach r-2",
 };
 
+/** What `POST /api/tasks` answers, and the row the list carries a moment later. */
+const CREATED: TaskView = {
+  ...RUNNING,
+  id: "t-3",
+  title: "Prune stale preview deployments",
+  agent: "housekeeping",
+  prompt: "Delete preview environments with no commits in 30 days.",
+  state: "queued",
+  attempts: 0,
+  runId: null,
+  sessionId: null,
+  startedAt: null,
+  queuePosition: 1,
+  attachCommand: null,
+};
+
+const started = (task: TaskView): TaskView => ({
+  ...task,
+  state: "running",
+  attempts: 1,
+  runId: "r-3",
+  sessionId: "s-3",
+  startedAt: 1_700_000_003_000,
+  queuePosition: null,
+  attachCommand: "claude attach r-3",
+});
+
 const settled = (task: TaskView, state: TaskView["state"]): TaskView => ({
   ...task,
   state,
@@ -70,6 +97,21 @@ interface Harness {
   cancelReply: TaskView;
 }
 
+const AGENT = {
+  id: "housekeeping",
+  name: "Housekeeping",
+  runName: "housekeeping",
+  description: "Tidies up after preview builds.",
+  model: null,
+  scope: "project",
+  plugin: null,
+  editable: true,
+  readOnlyReason: null,
+  parses: true,
+  valid: true,
+  error: null,
+};
+
 function setup(initial: Partial<Harness> = {}) {
   const harness: Harness = {
     tasks: initial.tasks ?? [RUNNING, OTHER],
@@ -80,7 +122,16 @@ function setup(initial: Partial<Harness> = {}) {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/tasks/stats") return json({ queued: 0, running: 1, waiting: 0, maxConcurrent: 2 });
+      if (url === "/api/tasks" && init?.method === "POST") return json(CREATED);
       if (url === "/api/tasks") return json({ tasks: harness.tasks, warning: null });
+      if (url === "/api/agents") return json([AGENT]);
+      if (url === "/api/config")
+        return json({
+          defaultCwd: "/home/sam/code/acme-web",
+          starterPrompt: "",
+          permissionMode: "ask",
+          templates: { agent: "", skill: "" },
+        });
       if (url.endsWith("/cancel") && init?.method === "POST") return json(harness.cancelReply);
       throw new Error(`unexpected request: ${url}`);
     }),
@@ -185,6 +236,29 @@ describe("TasksPage — the live region's last word", () => {
     await push([settled(RUNNING, "succeeded"), settled(OTHER, "failed")]);
 
     await waitFor(() => expect(region()).toHaveTextContent("2 tasks changed state."));
+  });
+
+  it("lets a new task's start of run speak, moments after it was queued", async () => {
+    // Creation is the one action with no competing retelling to outrank: the differ reports
+    // labels that *changed*, and a task appearing changed nothing. So the next thing it says
+    // about this task is a different event — on a free slot, this one starting a second later —
+    // and the queued sentence has no business silencing it.
+    const { user, push } = setup({ tasks: [OTHER] });
+    await screen.findByText(OTHER.title);
+
+    await user.click(await screen.findByRole("button", { name: "New task" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Agent"), AGENT.id);
+    await user.type(within(dialog).getByLabelText("Prompt"), CREATED.prompt);
+    await user.click(within(dialog).getByRole("button", { name: "Add to queue" }));
+
+    await waitFor(() => expect(region()).toHaveTextContent('Queued "Prune stale preview deployments".'));
+    // `task:created`, then `task:updated` a moment later — both well inside the four seconds a
+    // cancel or a retry would have held the region for.
+    await push([OTHER, CREATED]);
+    await push([OTHER, started(CREATED)]);
+
+    await waitFor(() => expect(region()).toHaveTextContent("Prune stale preview deployments: Running."));
   });
 
   it("announces a later change to the same task once the action's window has passed", async () => {
