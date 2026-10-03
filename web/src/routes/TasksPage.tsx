@@ -209,7 +209,10 @@ export function TasksPage() {
           */}
           <thead>
             <tr className="h-0">
-              <th scope="col" className="h-0 w-[var(--status-col-width)] p-0 max-md:w-32">
+              {/* Collapsed below `md`, where the badge moves into the title cell: at 390px a
+                  128px status column left the title — the one thing the operator came to read
+                  — with 154px, which truncated every row to about fifteen characters. */}
+              <th scope="col" className="h-0 w-[var(--status-col-width)] p-0 max-md:w-0">
                 <span className="sr-only">Status</span>
               </th>
               <th scope="col" className="h-0 p-0">
@@ -469,12 +472,22 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
           highlighted && "outline outline-2 -outline-offset-2 outline-[var(--color-accent)]",
         )}
       >
-        <td className="py-[var(--table-cell-pad-y)] pl-6 pr-[var(--table-cell-pad-x)] align-middle">
-          <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
-          {timing && <span className="mt-0.5 block truncate text-2xs text-fg-muted">{timing}</span>}
+        <td className={cn("py-[var(--table-cell-pad-y)] pl-6 pr-[var(--table-cell-pad-x)] align-middle", SECONDARY)}>
+          {/* `max-md:hidden`, not just a zero-width cell: a collapsed cell still reads out, and
+              the mobile copy below would make a screen reader announce the status twice. */}
+          <span className="block max-md:hidden">
+            <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
+            {timing && <span className="mt-0.5 block truncate text-2xs text-fg-muted">{timing}</span>}
+          </span>
         </td>
 
         <td className="px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
+          {/* The other half of that swap: below `md` the badge rides above the title, so the
+              title gets the full column instead of 46% of it. */}
+          <span className="mb-1 hidden flex-wrap items-center gap-x-2 gap-y-0.5 max-md:flex">
+            <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
+            {timing && <span className="truncate text-2xs text-fg-muted">{timing}</span>}
+          </span>
           <button
             type="button"
             aria-expanded={expanded}
@@ -493,7 +506,9 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
             deliberately *outside* the button: inside, it concatenates onto the accessible name
             and a screen reader announces "Upgrade the test runner to v4the background session…".
           */}
-          {reason && <span className="mt-0.5 block truncate pl-[1.125rem] text-2xs text-fg-muted">{reason}</span>}
+          {reason && (
+            <span className="mt-0.5 block truncate pl-[var(--row-text-indent)] text-2xs text-fg-muted">{reason}</span>
+          )}
         </td>
 
         <td className={cn("px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle", SECONDARY)}>

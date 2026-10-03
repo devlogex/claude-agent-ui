@@ -133,9 +133,9 @@ export function SchedulesPage() {
               )}
             >
               {/* State collapses below `md` too: at 390px its 96px is the difference between
-                  four reachable actions and a clipped Delete. Nothing is lost — the toggle
-                  carries "on" by position as well as hue, and a disabled schedule still says
-                  "Disabled — will not fire" in the line under its name. */}
+                  four reachable actions and a clipped Delete. The badge itself is not dropped,
+                  it moves — see the copy under the name in ScheduleRow. Leaving only the toggle
+                  would have made "is this on?" a question about thumb position and hue. */}
               <th
                 scope="col"
                 className={cn("w-[var(--schedule-state-col-width)] py-[var(--table-cell-pad-y)] pl-6 pr-3", SECONDARY)}
@@ -292,7 +292,11 @@ function ScheduleRow({ schedule, expanded, onToggle, highlighted, onEdit, onAnno
         )}
       >
         <td className={cn("py-[var(--table-cell-pad-y)] pl-6 pr-3 align-middle", SECONDARY)}>
-          <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
+          {/* `max-md:hidden`, not just a zero-width cell: a collapsed cell is still read out,
+              and the mobile copy in the line under the name would double the announcement. */}
+          <span className="block max-md:hidden">
+            <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
+          </span>
         </td>
 
         <td className="px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
@@ -305,20 +309,32 @@ function ScheduleRow({ schedule, expanded, onToggle, highlighted, onEdit, onAnno
             <Chevron aria-hidden="true" className="size-3 shrink-0 text-fg-subtle" />
             <span className="min-w-0 flex-1 truncate font-medium text-fg">{schedule.name}</span>
           </button>
+          {/* At 390px the State column is collapsed, so the badge comes back here — and it has
+              to come back somewhere: without it the only thing left saying whether a schedule
+              is on is the toggle, and a toggle says "on" by thumb position and hue alone, which
+              is the one thing a status in this app may never do (ux-guidelines No. 37).
+              "Disabled — will not fire" covers the off case on the Next line, but an enabled
+              schedule had no word at all.
+
+              Directly under the name rather than at the end of the stack: after the name, the
+              state is the thing being scanned for, so it does not belong below the timezone. */}
+          <span className="mt-1 hidden pl-[var(--row-text-indent)] max-md:block">
+            <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
+          </span>
           {/*
             The sentence *next to* the expression, never instead of it. The raw field is what the
             server validates and what gets edited, so hiding it would make the one thing you have
             to get right the one thing you cannot see — and the timezone rides along, because a
             cron expression without its zone is only two thirds of the answer.
           */}
-          <span className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 pl-[1.125rem] text-2xs">
+          <span className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 pl-[var(--row-text-indent)] text-2xs">
             <span className="text-fg-muted">{english ?? "A custom pattern"}</span>
             <code className="font-mono text-fg-subtle">{schedule.cron}</code>
             <span className="text-fg-subtle">{schedule.timezone}</span>
           </span>
-          {/* At 390px the two time columns are gone, so the next fire comes back here — it is
-              the thing someone opens this screen to check. */}
-          <span className="mt-0.5 hidden pl-[1.125rem] text-2xs text-fg-muted max-md:block">
+          {/* The two time columns are collapsed at 390px too, and the next fire is the thing
+              someone opens this screen to check. */}
+          <span className="mt-0.5 hidden pl-[var(--row-text-indent)] text-2xs text-fg-muted max-md:block">
             Next: <NextFire schedule={schedule} inline />
           </span>
         </td>
@@ -328,7 +344,11 @@ function ScheduleRow({ schedule, expanded, onToggle, highlighted, onEdit, onAnno
         </td>
 
         <td className={cn("px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle text-xs", SECONDARY)}>
-          <NextFire schedule={schedule} />
+          {/* Unlike Last fired, this one has a mobile copy above, so it has to leave the
+              a11y tree below `md` rather than just lose its width. */}
+          <span className="block max-md:hidden">
+            <NextFire schedule={schedule} />
+          </span>
         </td>
 
         {/* Row actions, in the row. Nothing here is buried in a detail page. */}

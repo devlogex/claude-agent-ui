@@ -323,6 +323,12 @@
   --statusbar-fg-strong: var(--color-fg);
 
   /* Data table */
+  /* The hanging indent for a row's secondary lines, so they align under the *title* rather
+     than under the chevron that precedes it. It is the chevron's width (--space-3) plus the
+     gap beside it (half of --space-3) — a token rather than a literal because four rows in
+     two tables need the same answer, and one of them drifting to 18px would misalign the
+     column with nothing failing to say so. */
+  --row-text-indent: 1.125rem;
   --table-header-bg: var(--color-surface);
   --table-header-fg: var(--color-fg-muted);
   --table-row-bg-hover: var(--color-surface-hover);

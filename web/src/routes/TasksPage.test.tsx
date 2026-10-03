@@ -197,7 +197,10 @@ describe("TasksPage — the live region's last word", () => {
     // label flip. It must not flatten the sentence that explains it.
     await push([settled(RUNNING, "succeeded"), OTHER]);
 
-    await waitFor(() => expect(screen.getByText("Succeeded")).toBeInTheDocument());
+    // getAllByText, because the badge is rendered twice: once in the status column and once
+    // stacked above the title for below-`md`. CSS displays exactly one, but jsdom does not
+    // resolve the media query, so both are in the tree here.
+    await waitFor(() => expect(screen.getAllByText("Succeeded")[0]).toBeInTheDocument());
     expect(region()).toHaveTextContent(
       '"Draft release notes for 0.4.0" finished before it could be stopped — Succeeded.',
     );
@@ -211,7 +214,8 @@ describe("TasksPage — the live region's last word", () => {
     await cancelFromRow(user, RUNNING);
     await push([settled(RUNNING, "cancelled"), OTHER]);
 
-    await waitFor(() => expect(screen.getByText("Cancelled")).toBeInTheDocument());
+    // Two copies, one per breakpoint — see the note in the test above.
+    await waitFor(() => expect(screen.getAllByText("Cancelled")[0]).toBeInTheDocument());
     expect(region()).toHaveTextContent('Cancelled "Draft release notes for 0.4.0".');
   });
 
