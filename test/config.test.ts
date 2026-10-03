@@ -101,4 +101,5 @@ test("--help and --version are parsed as boolean flags", () => {
   assert.deepEqual(parseArgs(["--help"]), { help: true });
   assert.deepEqual(parseArgs(["-v"]), { version: true });
   assert.deepEqual(parseArgs(["--open"]), { open: true });
+  assert.deepEqual(parseArgs(["--no-open"]), { open: false });
 });

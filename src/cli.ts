@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
 import { HOST, createApp } from "./server.ts";
+import { sweepTempFiles } from "./store/jsonStore.ts";
+import { type Lock, LockError, acquireLock } from "./store/lockfile.ts";
 
 const MIN_NODE_MAJOR = 20;
 
@@ -85,6 +87,17 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   const claudeProblem = await checkClaudeBinary(config.claudeBin);
   if (claudeProblem) throw new ConfigError(claudeProblem);
 
+  // Taken before anything reads or writes the state directory, so two servers never interleave
+  // their JSON writes. LockError already reads as a sentence, so it passes through as one.
+  let lock: Lock;
+  try {
+    lock = await acquireLock(config.dataDir);
+  } catch (err) {
+    throw err instanceof LockError ? new ConfigError(err.message) : err;
+  }
+  // Safe only while we hold the lock: any temp file still here was orphaned by an earlier crash.
+  await sweepTempFiles(config.dataDir).catch(() => 0);
+
   // With --port 0 the OS assigns the port at listen(), so the guard reads it back rather than
   // freezing the requested 0 — otherwise it would reject the very URL we are about to print.
   let boundPort = config.port;
@@ -106,14 +119,20 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
       server.once("error", reject);
     });
   } catch (err) {
+    // The lock outlives a failed listen() otherwise, and the next run would refuse to start.
+    lock.release();
     throw new ConfigError(describeListenError(err as NodeJS.ErrnoException, config.port));
   }
+  // Covers every way the server goes down: close() from a test, a signal, or an unhandled throw
+  // that unwinds to exit. release() is idempotent, so overlapping paths are harmless.
+  server.once("close", () => lock.release());
+  process.once("exit", () => lock.release());
 
   const address = server.address();
   boundPort = typeof address === "object" && address ? address.port : config.port;
   const url = `http://${HOST}:${boundPort}`;
   process.stdout.write(`Claude Agent UI: ${url}\n`);
-  if (flags.open) openBrowser(url);
+  if (flags.open ?? true) openBrowser(url);
 
   server.on("error", (err: Error) => {
     process.stderr.write(`${err.message}\n`);

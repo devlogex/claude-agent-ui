@@ -6,7 +6,7 @@ A local web UI to browse, edit, schedule and run your Claude Code agents as back
 npx claude-agent-ui
 ```
 
-Then open <http://127.0.0.1:3000>.
+It opens <http://127.0.0.1:3000> in your browser; pass `--no-open` if you would rather it did not.
 
 ## Requirements
 
@@ -26,7 +26,7 @@ Then open <http://127.0.0.1:3000>.
 --max-attempts <n>      Attempts per task, 1 = retries off (default 1)
 --history-limit <n>     Stored history entries (default 500)
 --permission-mode <m>   "ask" (default) or "bypassPermissions"
---open                  Open the UI in your browser once it is listening
+--no-open               Do not open the UI in your browser (it opens by default)
 -h, --help              Show this help
 -v, --version           Show the version
 ```
@@ -44,7 +44,11 @@ config file.
   resolving a hostname to `127.0.0.1`.
 - **No telemetry.** Nothing is sent anywhere. The only process it starts is your `claude` binary.
 - **State is yours.** Everything lives in `~/.claude-agent-ui/` as plain JSON, written
-  atomically.
+  atomically. One server at a time holds that directory: a second one exits and tells you which
+  PID has it, so two copies can never interleave their writes.
+- **Nothing polls.** The UI gets one `GET /api/events` server-sent-event stream and re-reads what
+  changed. It reconnects with `Last-Event-ID`, and a client that stops reading is dropped rather
+  than buffered.
 
 ## Development
 

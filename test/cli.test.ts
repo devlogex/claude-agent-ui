@@ -55,6 +55,8 @@ test("--port 0 prints a URL the server actually serves", async () => {
     path.join(home, ".claude-agent-ui"),
     "--claude-bin",
     process.execPath,
+    // Without this the default would launch a real browser on whoever runs the suite.
+    "--no-open",
   ]);
   assert.ok(server, "main should return the listening server");
   try {

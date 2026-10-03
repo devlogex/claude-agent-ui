@@ -65,12 +65,13 @@ const FLAG_KEYS: Record<string, keyof CliFlags> = {
   "--permission-mode": "permissionMode",
 };
 
-const BOOLEAN_FLAGS: Record<string, keyof CliFlags> = {
-  "--help": "help",
-  "-h": "help",
-  "--version": "version",
-  "-v": "version",
-  "--open": "open",
+const BOOLEAN_FLAGS: Record<string, { key: keyof CliFlags; value: boolean }> = {
+  "--help": { key: "help", value: true },
+  "-h": { key: "help", value: true },
+  "--version": { key: "version", value: true },
+  "-v": { key: "version", value: true },
+  "--open": { key: "open", value: true },
+  "--no-open": { key: "open", value: false },
 };
 
 export const USAGE = `claude-agent-ui — local web UI for Claude Code agents
@@ -88,7 +89,7 @@ Options:
   --max-attempts <n>      Attempts per task, 1 = retries off (default ${DEFAULTS.maxAttempts})
   --history-limit <n>     Stored history entries (default ${DEFAULTS.historyLimit})
   --permission-mode <m>   "ask" (default) or "bypassPermissions"
-  --open                  Open the UI in your browser once it is listening
+  --no-open               Do not open the UI in your browser (it opens by default)
   -h, --help              Show this help
   -v, --version           Show the version
 
@@ -106,8 +107,9 @@ export function parseArgs(argv: string[]): CliFlags {
           "Use an SSH tunnel if you need to reach it from another machine.",
       );
     }
-    if (arg in BOOLEAN_FLAGS) {
-      flags[BOOLEAN_FLAGS[arg]] = true as never;
+    const boolean = BOOLEAN_FLAGS[arg];
+    if (boolean) {
+      flags[boolean.key] = boolean.value as never;
       continue;
     }
     const eq = arg.indexOf("=");
