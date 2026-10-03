@@ -13,6 +13,34 @@ import { type Lock, LockError, acquireLock } from "./store/lockfile.ts";
 
 const MIN_NODE_MAJOR = 20;
 
+/** How long a shutdown waits for connections to drain before destroying what is left. */
+export const SHUTDOWN_TIMEOUT_MS = 3_000;
+
+/**
+ * Brings the server down without waiting on connections that never end.
+ *
+ * `server.close()` stops accepting new connections and then waits for the open ones, and an SSE
+ * stream is open by design — with the UI in a browser, that is every ordinary shutdown. So end the
+ * streams first, which lets each client see a clean end rather than a destroyed socket, and keep a
+ * timeout as the backstop for anything else still holding a socket.
+ */
+export function shutdown(server: Server, closeStreams: () => void, timeoutMs = SHUTDOWN_TIMEOUT_MS): Promise<void> {
+  closeStreams();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      server.closeAllConnections();
+      resolve();
+    }, timeoutMs);
+    timer.unref?.();
+    server.close(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+    // Idle keep-alive sockets hold close() open too, and nothing else is going to retire them.
+    server.closeIdleConnections();
+  });
+}
+
 export function readVersion(): string {
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json");
   try {
@@ -139,8 +167,11 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
     process.exitCode = 1;
   });
 
+  const closeStreams = app.locals.closeStreams as () => void;
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => server.close(() => process.exit(0)));
+    process.once(signal, () => {
+      void shutdown(server, closeStreams).then(() => process.exit(0));
+    });
   }
   return server;
 }

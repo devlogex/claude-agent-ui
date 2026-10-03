@@ -68,6 +68,12 @@ export function createApp(opts: AppOptions) {
   const app = express();
   // Published so later subsystems (the task queue, the scheduler) emit onto the same bus.
   app.locals.bus = bus;
+  // Shutdown needs these: server.close() waits for open connections, and an SSE connection never
+  // ends on its own, so something has to end them. See closeStreams below.
+  const streams = new Set<() => void>();
+  app.locals.closeStreams = () => {
+    for (const close of [...streams]) close();
+  };
   app.use(loopbackGuard(opts.port));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.static(webRoot));
@@ -88,7 +94,9 @@ export function createApp(opts: AppOptions) {
   // The only push channel in the product: nothing here polls. The response is owned by
   // streamEvents from this point on, so the handler must not touch res afterwards.
   app.get("/api/events", (req, res) => {
-    streamEvents(bus, req, res);
+    const close = streamEvents(bus, req, res);
+    streams.add(close);
+    res.on("close", () => streams.delete(close));
   });
 
   app.get(
