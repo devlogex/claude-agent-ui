@@ -64,18 +64,44 @@ export async function writeFileAtomic(file: string, content: string): Promise<vo
 }
 
 /**
+ * One promise chain per file, shared by every store pointing at it. Keyed by the resolved path
+ * rather than held on the instance, because two `JsonStore` objects on one file would otherwise
+ * read the same snapshot and silently drop one of the two writes.
+ */
+const chains = new Map<string, Promise<unknown>>();
+
+/** Runs `fn` after everything already queued for `key`, and keeps the queue from outliving it. */
+function enqueue<R>(key: string, fn: () => Promise<R>): Promise<R> {
+  const next = (chains.get(key) ?? Promise.resolve()).then(fn);
+  // Swallow the rejection on the chain only; `next` still rejects for the caller.
+  const tail: Promise<void> = next.then(
+    () => dropIfIdle(key, tail),
+    () => dropIfIdle(key, tail),
+  );
+  chains.set(key, tail);
+  return next;
+}
+
+/** Forgets a settled chain so a long-lived process does not keep an entry per file it ever wrote. */
+function dropIfIdle(key: string, tail: Promise<void>): void {
+  if (chains.get(key) === tail) chains.delete(key);
+}
+
+/**
  * A single JSON file holding one value, read and written atomically.
  *
- * `mutate` serialises read-modify-write cycles through one promise chain, so two concurrent
- * callers can never read the same snapshot and write over each other.
+ * `mutate` serialises read-modify-write cycles through one promise chain per file, so two
+ * concurrent callers can never read the same snapshot and write over each other.
  */
 export class JsonStore<T> {
-  private chain: Promise<unknown> = Promise.resolve();
+  private readonly key: string;
 
   constructor(
     readonly file: string,
     private readonly empty: () => T,
-  ) {}
+  ) {
+    this.key = path.resolve(file);
+  }
 
   /** Returns the stored value, or a fresh empty one when the file does not exist yet. */
   async read(): Promise<T> {
@@ -96,14 +122,11 @@ export class JsonStore<T> {
    * `fn` mutates the value in place; whatever it returns is handed back to the caller.
    */
   mutate<R>(fn: (value: T) => R | Promise<R>): Promise<R> {
-    const next = this.chain.then(async () => {
+    return enqueue(this.key, async () => {
       const value = await this.read();
       const result = await fn(value);
       await writeFileAtomic(this.file, JSON.stringify(value, null, 2));
       return result;
     });
-    // Swallow the rejection on the chain only; `next` still rejects for the caller.
-    this.chain = next.catch(() => undefined);
-    return next;
   }
 }

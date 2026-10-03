@@ -72,18 +72,49 @@ test("writeFileAtomic replaces the file and leaves no temp file behind", async (
   );
 });
 
-test("two stores on the same file do not collide on their temp paths", async () => {
+test("two stores on the same file serialise against each other, so neither write is lost", async () => {
   const dir = await tempHome();
   const file = path.join(dir, "state.json");
   const a = new JsonStore<number[]>(file, () => []);
   const b = new JsonStore<number[]>(file, () => []);
   await Promise.all([a.mutate((v) => v.push(1)), b.mutate((v) => v.push(2))]);
+  // Without a chain shared per file, both would read [] and the later write would drop the other.
   const saved = JSON.parse(await readFile(file, "utf8"));
-  assert.equal(Array.isArray(saved), true);
+  assert.deepEqual([...saved].sort(), [1, 2]);
   assert.deepEqual(
     (await readdir(dir)).filter((f) => f.endsWith(".tmp")),
     [],
   );
+});
+
+test("a path reached two ways is one chain, and an equivalent path resolves to the same one", async () => {
+  const dir = await tempHome();
+  const file = path.join(dir, "state.json");
+  const stores = [
+    new JsonStore<number[]>(file, () => []),
+    new JsonStore<number[]>(path.join(dir, ".", "state.json"), () => []),
+    new JsonStore<number[]>(path.join(dir, "sub", "..", "state.json"), () => []),
+  ];
+  await Promise.all(stores.flatMap((s, i) => [0, 1].map((j) => s.mutate((v) => v.push(i * 2 + j)))));
+  const saved: number[] = JSON.parse(await readFile(file, "utf8"));
+  assert.deepEqual(
+    [...saved].sort((x, y) => x - y),
+    [0, 1, 2, 3, 4, 5],
+  );
+});
+
+test("a rejected mutation does not wedge the chain for the next caller", async () => {
+  const dir = await tempHome();
+  const file = path.join(dir, "state.json");
+  const store = new JsonStore<number[]>(file, () => []);
+  await assert.rejects(
+    store.mutate(() => {
+      throw new Error("boom");
+    }),
+    /boom/,
+  );
+  await store.mutate((v) => v.push(1));
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")), [1]);
 });
 
 const CRASH_WRITER = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "crashWriter.ts");
