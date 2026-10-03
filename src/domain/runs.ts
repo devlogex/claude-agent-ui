@@ -8,14 +8,20 @@ import {
   type PermissionMode,
   type SessionPhase,
   type SessionWait,
-  isPermissionMode,
   sessionPhase,
   sessionWait,
 } from "../claude/claudeCli.ts";
 import { findTranscript, readFinalMessage } from "../claude/transcript.ts";
-import { expandHome } from "../config.ts";
 import { type EventBus, RUN_EVENTS } from "../events.ts";
 import { JsonStore } from "../store/jsonStore.ts";
+import {
+  MAX_PROMPT_LENGTH,
+  checkCwd,
+  checkPermissionMode,
+  checkPrompt,
+  checkRunName,
+  checkUnattended,
+} from "./runInput.ts";
 
 /**
  * "waiting" = parked on a prompt a human has to answer; not finished, and not progress either.
@@ -75,11 +81,9 @@ export function isActive(status: RunStatus): boolean {
 }
 
 const TRUST_HINT = /not trusted/i;
-export const MAX_PROMPT_LENGTH = 100_000;
+export { MAX_PROMPT_LENGTH };
 /** Oldest records past this count are dropped, so runs.json cannot grow without bound. */
 export const DEFAULT_HISTORY_LIMIT = 500;
-// Plugin agents are "<plugin>:<agent>"; never allow a leading "-" (would be read as a CLI option).
-const RUN_NAME = /^([a-z0-9][\w.-]*:)?[a-z0-9][\w.-]*$/i;
 
 export interface StartRunOptions {
   prompt?: unknown;
@@ -124,29 +128,12 @@ export class RunStore {
 
   /** A blank or missing prompt falls back to the configured starter prompt. */
   async start(agent: string, cwdInput: string, opts: StartRunOptions = {}): Promise<RunRecord> {
-    if (!RUN_NAME.test(agent)) throw new RunError(`invalid agent name: ${agent}`);
-    const unattended = opts.unattended ?? false;
-    if (typeof unattended !== "boolean") throw new RunError("unattended must be a boolean");
-    const modeInput = opts.permissionMode ?? DEFAULT_PERMISSION_MODE;
-    if (!isPermissionMode(modeInput)) {
-      throw new RunError(`permissionMode must be "ask" or "bypassPermissions"`);
-    }
-    const permissionMode: PermissionMode = modeInput;
-    const custom = opts.prompt ?? "";
-    if (typeof custom !== "string") throw new RunError("prompt must be a string");
-    if (custom.length > MAX_PROMPT_LENGTH) {
-      throw new RunError(`prompt is too long (max ${MAX_PROMPT_LENGTH} characters)`);
-    }
-    // execFile rejects NUL in argv; report it as bad input rather than a CLI failure.
-    if (custom.includes("\0")) throw new RunError("prompt must not contain NUL characters");
-    const prompt = custom.trim() ? custom : this.starterPrompt;
-    const cwd = expandHome(cwdInput.trim(), this.home);
-    if (!cwd || !path.isAbsolute(cwd)) throw new RunError("working directory must be an absolute path");
-    try {
-      if (!(await stat(cwd)).isDirectory()) throw new Error();
-    } catch {
-      throw new RunError(`working directory does not exist: ${cwd}`);
-    }
+    checkRunName(agent);
+    const unattended = checkUnattended(opts.unattended, false);
+    const permissionMode = checkPermissionMode(opts.permissionMode);
+    const prompt = checkPrompt(opts.prompt, this.starterPrompt);
+    // No fallback here: a run names its own directory, and an empty one is a bad request.
+    const cwd = await checkCwd(cwdInput, this.home, "");
 
     let runId: string;
     try {
