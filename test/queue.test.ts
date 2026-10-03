@@ -48,12 +48,28 @@ class FakeCli extends ClaudeCli {
     return id;
   }
 
+  /** Lets a test run inside the watcher's await, so an interleaving is deterministic not lucky. */
+  onList: (() => Promise<void>) | null = null;
+
   async listSessions(): Promise<BackgroundSession[]> {
     if (this.listError) throw new CliError(this.listError, this.listError);
+    const gate = this.onList;
+    if (gate) {
+      this.onList = null;
+      await gate();
+    }
     return [...this.sessions.values()];
   }
 
+  /** The same gate for the other side of the race: a tick landing inside `cancel`'s await. */
+  onStop: (() => Promise<void>) | null = null;
+
   async stop(id: string): Promise<void> {
+    const gate = this.onStop;
+    if (gate) {
+      this.onStop = null;
+      await gate();
+    }
     if (this.stopError) throw new CliError(this.stopError, this.stopError);
     this.stopped.push(id);
     this.patch(id, { pid: undefined, status: undefined, state: "stopped" });
@@ -323,6 +339,80 @@ test("cancel on a finished task is 409, and claude stop failing is 502", async (
   await assert.rejects(queue.cancel(live.id), (err: any) => err.status === 502);
   // And it stays running rather than being recorded as cancelled on a stop that did not happen.
   assert.equal((await view(queue, live.id)).state, "running");
+});
+
+test("a cancel landing inside a settling tick is not overwritten by it", async () => {
+  const { home, cli, queue } = await harness();
+  const task = await queue.create({ agent: "alpha", prompt: "a" });
+  await queue.tick();
+  await writeTranscript(home, "run1-session", "All done.");
+  cli.finish("run1");
+
+  // The watcher reads the running tasks, then awaits the CLI twice before it writes. A cancel
+  // arriving in that window is the user's decision and has to win: the task is already over.
+  cli.onList = async () => {
+    assert.equal((await queue.cancel(task.id)).state, "cancelled");
+  };
+  await queue.tick();
+
+  const after = await view(queue, task.id);
+  assert.equal(after.state, "cancelled", "the settling tick revived a cancelled task");
+  assert.equal(after.result, null);
+  assert.deepEqual(cli.stopped, ["run1"]);
+});
+
+test("a cancel landing inside a settling tick is never requeued for another attempt", async () => {
+  const { cli, queue } = await harness({ maxAttempts: 2 });
+  const task = await queue.create({ agent: "alpha", prompt: "a" });
+  await queue.tick();
+  assert.equal((await view(queue, task.id)).maxAttempts, 2);
+  cli.fail("run1");
+
+  // The escalation of the same race: the failure path would read attempts(1) < maxAttempts(2)
+  // and put the task the user just stopped back in the queue, where it starts a second
+  // background session — carrying this task's permissionMode into an unsupervised rerun.
+  cli.onList = async () => {
+    assert.equal((await queue.cancel(task.id)).state, "cancelled");
+  };
+  await queue.tick();
+
+  assert.equal((await view(queue, task.id)).state, "cancelled", "a cancelled task was requeued");
+  assert.deepEqual(await queue.stats(), { queued: 0, running: 0, waiting: 0, maxConcurrent: 2 });
+  assert.equal(cli.started.length, 1, "the cancelled task was launched a second time");
+});
+
+test("a task that settles while claude stop is in flight keeps the outcome it reported", async () => {
+  const { home, cli, queue } = await harness();
+  const task = await queue.create({ agent: "alpha", prompt: "a" });
+  await queue.tick();
+  await writeTranscript(home, "run1-session", "All done.");
+  cli.finish("run1");
+  // The other direction: cancel saw it running, then a tick settled it while `claude stop` was
+  // still in flight. A real result must not be thrown away and relabelled "cancelled".
+  cli.onStop = async () => {
+    await queue.tick();
+  };
+  const returned = await queue.cancel(task.id);
+  assert.equal(returned.state, "succeeded", "cancel overwrote a result that had already landed");
+  assert.equal(returned.result, "All done.");
+  assert.equal((await view(queue, task.id)).state, "succeeded");
+});
+
+test("a requeued attempt does not carry the previous attempt's result or error", async () => {
+  const { home, cli, queue } = await harness({ maxAttempts: 2 });
+  const task = await queue.create({ agent: "alpha", prompt: "a" });
+  await queue.tick();
+  await writeTranscript(home, "run1-session", "half-finished thought");
+  cli.fail("run1");
+  await queue.tick();
+
+  // Queued again, so the row expansion reads `result` — and it must not show the failed
+  // attempt's text as if this one had produced it.
+  const requeued = await view(queue, task.id);
+  assert.equal(requeued.state, "queued");
+  assert.equal(requeued.attempts, 1);
+  assert.equal(requeued.result, null);
+  assert.equal(requeued.error, null);
 });
 
 test("retry clones a finished task to a new queued one and leaves the original alone", async () => {

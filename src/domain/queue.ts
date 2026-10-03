@@ -365,7 +365,13 @@ export class TaskQueue {
     return this.viewOf(id);
   }
 
-  /** Queued drops out of the queue; running calls `claude stop`. Already cancelled is a no-op. */
+  /**
+   * Queued drops out of the queue; running calls `claude stop`. Already cancelled is a no-op.
+   *
+   * The other half of the same race: if the task settled while `claude stop` was in flight then
+   * it is already terminal and keeps the outcome it reported, rather than having a real result
+   * overwritten with "cancelled". Either way the caller gets the task's actual final state.
+   */
   async cancel(id: string): Promise<TaskView> {
     const task = await this.require(id);
     // Idempotent so a double-click is never an error the user has to read.
@@ -412,12 +418,24 @@ export class TaskQueue {
     return this.viewOf(clone.id);
   }
 
+  /**
+   * Writes a terminal state, once. Every caller here reads a task, awaits something slow, then
+   * writes — the watcher awaits two CLI calls, `cancel` awaits `claude stop` — so by the time a
+   * write lands the record may have moved on. A terminal state is therefore final: the first
+   * writer wins and later ones no-op, which is what stops a settling tick from reviving a task
+   * the user just cancelled. `guard` adds the caller's own view of what it is settling.
+   *
+   * Reports whether the write happened, so a caller can tell a win from a lost race.
+   */
   private async finish(
     id: string,
     state: TaskState,
     patch: { result?: string | null; error?: string | null; sessionId?: string | null },
-  ): Promise<void> {
-    await this.patch(id, (task) => {
+    guard?: (task: TaskRecord) => boolean,
+  ): Promise<boolean> {
+    const written = await this.patch(id, (task) => {
+      if (isTerminal(task.state)) return false;
+      if (guard && !guard(task)) return false;
       task.state = state;
       task.finishedAt = Date.now();
       task.waiting = null;
@@ -427,7 +445,17 @@ export class TaskQueue {
       if (patch.sessionId !== undefined && patch.sessionId !== null) task.sessionId = patch.sessionId;
       return true;
     });
+    if (!written) return false;
     await this.prune();
+    return true;
+  }
+
+  /**
+   * The watcher's claim on a task: it may only write the outcome of the attempt it observed.
+   * A cancel, or a later attempt, moves the record out from under it and the write is dropped.
+   */
+  private static owns(observed: TaskRecord): (task: TaskRecord) => boolean {
+    return (task) => task.state === "running" && task.runId === observed.runId;
   }
 
   /** Drops the oldest finished tasks past the cap, so tasks.json cannot grow without bound. */
@@ -531,6 +559,7 @@ export class TaskQueue {
       const held = wait !== null && task.waiting !== null && sameWait(task.waiting, wait);
       const waiting: TaskWaiting | null = wait ? { ...wait, since: held ? task.waiting!.since : Date.now() } : null;
       await this.patch(task.id, (t) => {
+        if (!TaskQueue.owns(task)(t)) return false;
         let changed = false;
         if (sessionId && t.sessionId !== sessionId) {
           t.sessionId = sessionId;
@@ -553,7 +582,7 @@ export class TaskQueue {
       // never has to know it exists, and changing it stays a one-codebase change.
       const blocked = final !== null && BLOCKED_PREFIX.test(final);
       const result = blocked && final !== null ? final.replace(BLOCKED_PREFIX, "") : final;
-      await this.finish(task.id, blocked ? "blocked" : "succeeded", { result, sessionId });
+      await this.finish(task.id, blocked ? "blocked" : "succeeded", { result, sessionId }, TaskQueue.owns(task));
       return;
     }
     const reason =
@@ -572,7 +601,11 @@ export class TaskQueue {
     return message?.text ?? null;
   }
 
-  /** Fails the task, or requeues it with exponential backoff when attempts remain. */
+  /**
+   * Fails the task, or requeues it with exponential backoff when attempts remain. Both paths
+   * are guarded by the attempt the caller observed: requeuing a cancelled task would put work
+   * the user stopped back in the queue and launch a second session for it.
+   */
   private async failAttempt(
     task: TaskRecord,
     error: string,
@@ -582,19 +615,23 @@ export class TaskQueue {
     if (task.attempts < task.maxAttempts) {
       const delay = BACKOFF_BASE_MS * 2 ** (task.attempts - 1);
       await this.patch(task.id, (t) => {
+        if (!TaskQueue.owns(task)(t)) return false;
         t.state = "queued";
         t.runId = null;
         t.sessionId = null;
         t.startedAt = null;
         t.waiting = null;
-        t.error = error;
-        t.result = result;
+        // The failed attempt's output does not belong to the queued one that replaces it: the
+        // row expansion reads `result` straight out, so leaving it would show the last
+        // attempt's text as if this one had produced it. The final attempt keeps its cause.
+        t.error = null;
+        t.result = null;
         t.nextAttemptAt = Date.now() + delay;
         return true;
       });
       return;
     }
-    await this.finish(task.id, "failed", { error, result, sessionId });
+    await this.finish(task.id, "failed", { error, result, sessionId }, TaskQueue.owns(task));
   }
 
   private async fill(): Promise<void> {
@@ -652,7 +689,7 @@ export class TaskQueue {
       // resolved lazily by the watcher
     }
     const attached = await this.patch(task.id, (t) => {
-      if (t.state !== "running") return false;
+      if (!TaskQueue.owns(task)(t)) return false;
       t.runId = runId;
       t.sessionId = sessionId;
       return true;
