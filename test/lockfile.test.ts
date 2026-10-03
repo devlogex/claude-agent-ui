@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { main } from "../src/cli.ts";
@@ -74,6 +75,52 @@ test("release does not delete a lock another server has since taken over", async
   assert.equal(JSON.parse(await readFile(taker.file, "utf8")).pid, 99);
   await assert.rejects(acquireLock(dir, { pid: 7, isAlive: always }), /PID 99/);
   taker.release();
+});
+
+test("the lockfile records the host that wrote it", async () => {
+  const dir = await tempHome();
+  const lock = await acquireLock(dir, { pid: 4242, isAlive: always });
+  assert.equal(JSON.parse(await readFile(lock.file, "utf8")).hostname, os.hostname());
+  lock.release();
+});
+
+test("a lock held by another machine is refused, alive or not, because we cannot tell", async () => {
+  // The default ~/.claude-agent-ui on a synced or networked home is exactly this case: pid 4242
+  // over there is some unrelated process over here, so neither answer from a signal-0 probe means
+  // anything. Both are refused rather than guessed at.
+  for (const isAlive of [always, never]) {
+    const dir = await tempHome();
+    await writeFile(
+      path.join(dir, LOCK_FILE),
+      JSON.stringify({ pid: 4242, startedAt: Date.now(), hostname: "other-laptop" }),
+    );
+    await assert.rejects(acquireLock(dir, { pid: 99, isAlive, hostname: "this-laptop" }), (err: unknown) => {
+      assert.ok(err instanceof LockError);
+      assert.match(err.message, /locked by claude-agent-ui on another machine \("other-laptop", PID 4242\)/);
+      assert.match(err.message, /cannot tell from here whether that server is still running/);
+      assert.match(err.message, /--data-dir/);
+      return true;
+    });
+    // And it is left exactly as we found it: refusing must never half-take the lock.
+    assert.equal(JSON.parse(await readFile(path.join(dir, LOCK_FILE), "utf8")).hostname, "other-laptop");
+  }
+});
+
+test("a lockfile from an older build, with no hostname, still reclaims on a dead PID", async () => {
+  const dir = await tempHome();
+  await writeFile(path.join(dir, LOCK_FILE), JSON.stringify({ pid: 4242, startedAt: Date.now() }));
+  const lock = await acquireLock(dir, { pid: 99, isAlive: never, hostname: "this-laptop" });
+  assert.equal(lock.info.pid, 99);
+  lock.release();
+});
+
+test("release leaves a lockfile it cannot read, rather than throwing out of the exit handler", async () => {
+  const dir = await tempHome();
+  const lock = await acquireLock(dir, { pid: 4242, isAlive: always });
+  // Stands in for an EACCES or EIO at shutdown: readFileSync on a directory fails with EISDIR.
+  await rm(lock.file);
+  await mkdir(lock.file);
+  assert.doesNotThrow(() => lock.release());
 });
 
 /** Starts a server through main() the way the bin entry does, minus the browser. */
