@@ -57,8 +57,7 @@ function setup(onCreate?: (body: unknown) => void) {
  * behaviour this dialog is responsible for: that `ask` wins regardless of what the server's
  * configured mode says, and that what crosses the wire is the one accepted literal.
  */
-const askOption = (opts?: { hidden?: boolean }) =>
-  screen.getByRole("radio", { name: /Ask before each tool/, ...opts });
+const askOption = (opts?: { hidden?: boolean }) => screen.getByRole("radio", { name: /Ask before each tool/, ...opts });
 const bypassOption = (opts?: { hidden?: boolean }) =>
   screen.getByRole("radio", { name: /Bypass permission prompts/, ...opts });
 

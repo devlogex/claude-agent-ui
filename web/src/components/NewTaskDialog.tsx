@@ -89,7 +89,12 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
     });
   }
 
-  const derivedTitle = prompt.split("\n").find((l) => l.trim())?.trim().slice(0, TITLE_LIMIT) ?? "";
+  const derivedTitle =
+    prompt
+      .split("\n")
+      .find((l) => l.trim())
+      ?.trim()
+      .slice(0, TITLE_LIMIT) ?? "";
   const promptTooLong = prompt.length > PROMPT_LIMIT;
 
   return (
@@ -261,7 +266,6 @@ export function NewTaskDialog({ open, onOpenChange, onCreated }: NewTaskDialogPr
           </form>
         </DialogPanel>
       </Dialog>
-
     </>
   );
 }

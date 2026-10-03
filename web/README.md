@@ -41,15 +41,15 @@ node web/scripts/shoot.mjs ./shots    # renders the shell at 1440x900 and 390x84
 
 ## How it is put together
 
-| Path                   | What lives there                                                          |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `src/styles/tokens.css`| The three-layer token set. Read the header comment before adding a colour. |
-| `src/styles/index.css` | Tailwind entry, self-hosted fonts, global focus and reduced-motion rules.  |
-| `src/lib/eventStream.ts` | The single SSE connection and its backoff.                               |
-| `src/hooks/useEventStream.ts` | Maps server events onto React Query cache invalidations.            |
-| `src/components/`      | Shell (sidebar, status bar) and the shared primitives.                     |
-| `src/components/ui/`   | shadcn-style primitives: Radix + cva + `cn`.                               |
-| `src/routes/`          | One file per area.                                                         |
+| Path                          | What lives there                                                           |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| `src/styles/tokens.css`       | The three-layer token set. Read the header comment before adding a colour. |
+| `src/styles/index.css`        | Tailwind entry, self-hosted fonts, global focus and reduced-motion rules.  |
+| `src/lib/eventStream.ts`      | The single SSE connection and its backoff.                                 |
+| `src/hooks/useEventStream.ts` | Maps server events onto React Query cache invalidations.                   |
+| `src/components/`             | Shell (sidebar, status bar) and the shared primitives.                     |
+| `src/components/ui/`          | shadcn-style primitives: Radix + cva + `cn`.                               |
+| `src/routes/`                 | One file per area.                                                         |
 
 Two rules that are enforced, not just asked for:
 
