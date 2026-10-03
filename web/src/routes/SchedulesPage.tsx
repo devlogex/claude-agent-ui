@@ -449,14 +449,17 @@ function LastFired({ schedule }: { schedule: Schedule }) {
   }
   return (
     <span className="block">
-      <time
-        dateTime={new Date(schedule.lastFiredAt).toISOString()}
-        title={formatInZone(schedule.lastFiredAt, schedule.timezone)}
-        className="text-fg-muted"
-      >
+      <time dateTime={new Date(schedule.lastFiredAt).toISOString()} className="block text-fg-muted">
         {relativeTime(schedule.lastFiredAt)}
       </time>
-      {schedule.lastTrigger === "manual" && <span className="mt-0.5 block text-2xs text-fg-subtle">run by hand</span>}
+      {/* The zone is named here for the same reason the next-fire column names it, facing
+          backwards: "2 hours ago" read against the wrong wall clock is how an operator decides
+          the wrong run is the one they are looking at. A `title` only answers that for a mouse,
+          so the exact time is on the page, not in a tooltip. */}
+      <span className="mt-0.5 block text-2xs text-fg-subtle">
+        {formatInZone(schedule.lastFiredAt, schedule.timezone)} · {schedule.timezone}
+        {schedule.lastTrigger === "manual" && " · run by hand"}
+      </span>
     </span>
   );
 }
