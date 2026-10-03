@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { test } from "node:test";
 import { ClaudeCli } from "../src/claude/claudeCli.ts";
 import { createApp, loopbackGuard } from "../src/server.ts";
-import { fixtureHome } from "./helpers.ts";
+import { fixtureHome, put } from "./helpers.ts";
 
 async function withServer(fn: (port: number) => Promise<void>) {
   const home = await fixtureHome();
@@ -144,5 +145,51 @@ test("agent listings never include the server-side file path", async () => {
     const agents = JSON.parse(body);
     assert.ok(agents.length > 0);
     for (const agent of agents) assert.equal("filePath" in agent, false);
+  });
+});
+
+/** Same as withServer, but with a built client on disk so the history fallback has something to serve. */
+async function withClient(fn: (port: number) => Promise<void>) {
+  const home = await fixtureHome();
+  const webRoot = path.join(home, "web");
+  await put(path.join(webRoot, "index.html"), "<!doctype html><title>shell</title>");
+  await put(path.join(webRoot, "assets", "app.js"), "export const x = 1;\n");
+  const cli = new ClaudeCli(async () => ({ stdout: "[]", stderr: "" }));
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  server.on(
+    "request",
+    createApp({ home, cli, port, starterPrompt: "go", defaultCwd: home, dataDir: `${home}/.ui`, webRoot }),
+  );
+  try {
+    await fn(port);
+  } finally {
+    server.close();
+  }
+}
+
+test("a client route reloads into the shell instead of 404ing", async () => {
+  await withClient(async (port) => {
+    for (const p of ["/", "/agents", "/skills", "/tasks", "/tasks/abc123", "/schedule"]) {
+      const { status, body } = await request(port, { path: p });
+      assert.equal(status, 200, p);
+      assert.match(body, /<title>shell<\/title>/, p);
+    }
+    // A real asset still comes from disk, not from the fallback.
+    const asset = await request(port, { path: "/assets/app.js" });
+    assert.equal(asset.status, 200);
+    assert.match(asset.body, /export const x/);
+  });
+});
+
+test("the history fallback does not swallow a missing API route or a missing asset", async () => {
+  await withClient(async (port) => {
+    // HTML for a mistyped endpoint would make a 404 look like it worked.
+    assert.equal((await request(port, { path: "/api/nope" })).status, 404);
+    // HTML for a missing .js surfaces as a MIME error, hiding the file that is actually absent.
+    assert.equal((await request(port, { path: "/assets/gone.js" })).status, 404);
+    // Only GET/HEAD navigate; a POST to an unknown path is not a page load.
+    assert.equal((await request(port, { method: "POST", path: "/tasks", body: "{}" })).status, 404);
   });
 });

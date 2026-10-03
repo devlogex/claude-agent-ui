@@ -417,6 +417,20 @@ export function createApp(opts: AppOptions) {
     }),
   );
 
+  // /tasks, /schedule and the rest exist only in the browser's router, so a reload or a pasted
+  // link has to come back as index.html — express.static above already answered anything real.
+  // Three things keep their own 404: /api, because a mistyped endpoint should not look like it
+  // worked; a path with an extension, because handing HTML to a request for a missing .js reads
+  // as a MIME error rather than the missing file it is; and a client that did not ask for HTML.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api/") || path.extname(req.path) !== "" || !req.accepts("html")) return next();
+    res.sendFile(path.resolve(webRoot, "index.html"), (err) => {
+      // No built client on disk (a dev server run straight from src) — fall through to the 404.
+      if (err) next();
+    });
+  });
+
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     const raw =
       err instanceof ValidationError ||
