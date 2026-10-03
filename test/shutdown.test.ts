@@ -82,6 +82,10 @@ test("SIGINT brings the server down while an SSE client is connected", async () 
 test("SIGTERM with no client attached still exits cleanly and releases the lock", async () => {
   const dataDir = path.join(await tempHome(), ".claude-agent-ui");
   const { child } = await startServer(dataDir);
+  // Immediately, with nothing in between: the URL is printed only after the signal handlers are
+  // armed, so the first instant the test can see it is already too late to catch a bare SIGTERM.
+  // Before that ordering existed this killed the process outright — exit code null, lock left on
+  // disk — on Node 20, and won the race by luck on newer ones.
   child.kill("SIGTERM");
   assert.equal(await exitWithin(child, 15_000), 0);
   assert.equal(existsSync(path.join(dataDir, LOCK_FILE)), false);

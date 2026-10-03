@@ -166,6 +166,19 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   });
   process.once("exit", () => lock.release());
 
+  // Armed here, before start() and before the URL is printed, because the default disposition of
+  // SIGTERM is to terminate: a signal arriving in the gap used to kill the process outright,
+  // skipping the exit handler above and leaving the lockfile behind to confuse the next start.
+  // The gap is small but real — `npx claude-agent-ui` then an immediate Ctrl-C hits it, and so
+  // did the SIGTERM shutdown test on Node 20. Stopping early is safe: an unstarted queue has no
+  // timer to clear and an unstarted scheduler has no jobs to stop.
+  const closeStreams = app.locals.closeStreams as () => void;
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void shutdown(server, closeStreams).then(() => process.exit(0));
+    });
+  }
+
   // Only once the port is ours: reconciles tasks stranded `running` by an earlier crash, then
   // starts the worker loop. Background sessions outlive us, so a restart adopts them.
   await tasks.start();
@@ -184,12 +197,6 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
     process.exitCode = 1;
   });
 
-  const closeStreams = app.locals.closeStreams as () => void;
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      void shutdown(server, closeStreams).then(() => process.exit(0));
-    });
-  }
   return server;
 }
 
