@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { validateAgentContent } from "../src/domain/agentStore.ts";
 import { discoverSkills } from "../src/domain/skills.ts";
 import {
   assertInsideSkillsDir,
@@ -123,6 +124,52 @@ test("a skill may leave `name` out: Claude Code reads it as the directory name",
   assert.throws(
     () => validateSkillContent("---\ndescription: No name here\n---\n", { forNewPath: true }),
     /`name` is required/,
+  );
+});
+
+// T-15: measured by reading the loader in claude 2.1.288. A filesystem skill's id is its
+// *directory* name; the frontmatter `name` is read into `displayName` and nothing else, with no
+// rule of any kind applied to it. The leading-`-` rule exists because `claude --agent <name>`
+// parses a leading `-` as a flag, and the `:` rule because an agent id may be plugin-scoped —
+// neither is ever true of a skill, so neither rule is ours to enforce on one.
+test("the `-` and `:` rules are agent rules: a skill's `name` is only a display label", () => {
+  // Quoted, because a leading `-` is a block-sequence indicator to YAML before any rule of ours
+  // gets a say. `:` only needs quoting to keep the two cases written the same way.
+  const md = (name: string) => `---\nname: "${name}"\ndescription: Odd but loadable\n---\n`;
+  for (const written of ["-weird", "-", "a:b", "plugin:thing"]) {
+    assert.deepEqual(validateSkillContent(md(written)), { name: written }, `skill \`name: "${written}"\``);
+    // The same name on an agent, where it really is the id it runs under, is still refused.
+    assert.throws(() => validateAgentContent(md(written)), /cannot (start with `-`|contain `:`)/);
+  }
+  // `createSkill` builds a directory from `name`, so the path-safe rule still catches both there.
+  for (const written of ["-weird", "a:b"]) {
+    assert.throws(() => validateSkillContent(md(written), { forNewPath: true }), /must match/);
+  }
+});
+
+// T-15: the inconsistency this closes — the directory-name fallback never went through the rules a
+// written `name` had to pass, so one skill was judged two ways. Now there is no rule left to skip.
+test("a skill in an odd directory reads the same whether or not it writes `name`", async () => {
+  const home = await tempHome();
+  const dir = path.join(home, ".claude", "skills", "-weird");
+  await mkdir(dir, { recursive: true });
+
+  const fallback = "---\ndescription: Takes its name from the directory\n---\n";
+  await writeFile(path.join(dir, "SKILL.md"), fallback);
+  const viaDir = (await discoverSkills(home)).find((s) => s.dirName === "-weird")!;
+  assert.equal(viaDir.valid, true);
+  assert.equal(viaDir.error, null);
+  assert.equal(viaDir.name, "-weird");
+
+  // Writing the name the fallback already produced is the same skill, judged the same way.
+  await updateSkill(home, viaDir.id, '---\nname: "-weird"\ndescription: Says the name out loud\n---\n');
+  const viaName = (await discoverSkills(home)).find((s) => s.dirName === "-weird")!;
+  assert.equal(viaName.valid, true);
+  assert.equal(viaName.error, null);
+  assert.deepEqual(
+    { name: viaName.name, ref: viaName.ref },
+    { name: viaDir.name, ref: viaDir.ref },
+    "the written name and the fallback agree",
   );
 });
 

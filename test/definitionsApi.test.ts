@@ -208,6 +208,18 @@ test("the validate routes check a draft without writing it", async () => {
       fields: [{ field: "name", message: "`name` is required" }],
     });
 
+    // T-15: they differ on two more. A skill's `name` is a display label, never a command-line
+    // argument and never a plugin-scoped id, so neither rule is real for one.
+    const dashed = { content: '---\nname: "-weird"\ndescription: Odd but loadable\n---\n' };
+    assert.deepEqual(await api("POST", "/api/skills/validate", dashed).then((r) => r.body), {
+      valid: true,
+      fields: [],
+    });
+    assert.deepEqual(await api("POST", "/api/agents/validate", dashed).then((r) => r.body), {
+      valid: false,
+      fields: [{ field: "name", message: "`name` cannot start with `-`" }],
+    });
+
     // The editor opens files it did not create. A name this app would not generate is not an
     // error to show while someone edits that file — only the create route builds a path from it.
     const existing = await api("POST", "/api/agents/validate", { content: agentMd("Code-Reviewer") });

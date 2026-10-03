@@ -51,8 +51,9 @@ export interface CheckOptions {
    */
   forNewPath?: boolean;
   /**
-   * Which kind of definition this is, because Claude Code requires `name` of one and not the
-   * other. Defaults to `"agent"`, the stricter rule.
+   * Which kind of definition this is, because Claude Code treats the two names differently: an
+   * agent's `name` is its id, a skill's is only a display label. Defaults to `"agent"`, the
+   * stricter rule.
    */
   kind?: "agent" | "skill";
 }
@@ -65,10 +66,15 @@ export interface CheckOptions {
  * `:` reserved for plugin-scoped ids, and `description` has to say when to reach for the file.
  * `forNewPath` adds our own, stricter path-safety rule on top.
  *
- * `kind: "skill"` drops the `name` requirement, because Claude Code loads a SKILL.md without one
- * and falls back to the directory name — measured against the CLI, not assumed. A skill we are
- * about to create still needs one, since its directory is built from it, so `forNewPath` brings
- * the requirement back.
+ * `kind: "skill"` keeps only the `description` rule, because none of the `name` rules are real
+ * for a skill — measured against claude 2.1.288, not assumed. A skill's id is its *directory*
+ * name; the frontmatter `name` is read as a display label and nothing else, so it is never
+ * required, never parsed as a flag the way `claude --agent <name>` parses one, and never carries
+ * a plugin-scoped id. A SKILL.md writing `name: -weird` or `name: a:b` loads either way.
+ *
+ * A skill we are about to *create* is the one case that still needs a usable `name`, since its
+ * directory is built from it, so `forNewPath` brings both the requirement and `NAME_RE` back —
+ * and `NAME_RE` already excludes a leading `-` and a `:`.
  *
  * Every rule is applied to the trimmed `name`, which is also the one returned, so surrounding
  * whitespace can neither smuggle a name past a rule nor fail one: `name: "ok-1 "` creates `ok-1`.
@@ -94,15 +100,17 @@ export function checkDefinition(content: unknown, opts: CheckOptions = {}): Chec
   // `name: " -dash"` would pass the leading-`-` rule and still run as `-dash`.
   const raw = parsed.data.name;
   const name = typeof raw === "string" ? raw.trim() : raw;
-  // A skill may leave `name` out entirely; a `name` it does write still has to be a usable one.
+  // A skill may leave `name` out entirely, and the `name` it does write is only a display label.
+  // Both rules below therefore apply to agents alone, where `name` is the id we run.
   const omitted = raw === undefined || raw === null;
-  const nameRequired = opts.kind !== "skill" || opts.forNewPath === true || !omitted;
+  const skill = opts.kind === "skill";
+  const nameRequired = !skill || opts.forNewPath === true || !omitted;
   if (typeof name !== "string" || !name) {
     if (nameRequired) fields.push({ field: "name", message: "`name` is required" });
-  } else if (name.includes(":")) {
+  } else if (!skill && name.includes(":")) {
     // Claude Code reserves `:` for plugin-scoped ids and refuses to load the file otherwise.
     fields.push({ field: "name", message: "`name` cannot contain `:`, which is reserved for plugin names" });
-  } else if (name.startsWith("-")) {
+  } else if (!skill && name.startsWith("-")) {
     fields.push({ field: "name", message: "`name` cannot start with `-`" });
   } else if (opts.forNewPath && !NAME_RE.test(name)) {
     fields.push({
