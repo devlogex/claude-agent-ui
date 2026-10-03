@@ -94,6 +94,8 @@ export interface Agent {
   editable: boolean;
   /** Why the file cannot be edited, in a sentence to show the user; null when it can. */
   readOnlyReason: string | null;
+  /** The frontmatter block itself parsed. True even when a required key is missing. */
+  parses: boolean;
   /** False when Claude Code would skip the file — bad frontmatter, or a missing required key. */
   valid: boolean;
   /** Every problem behind `valid: false`, in one sentence to show the user; null when there are none. */
@@ -127,6 +129,8 @@ export interface Skill {
   plugin: string | null;
   editable: boolean;
   readOnlyReason: string | null;
+  /** The frontmatter block itself parsed. True even when a required key is missing. */
+  parses: boolean;
   /** False when Claude Code would skip the skill — bad frontmatter, or a missing required key. */
   valid: boolean;
   /** Every problem behind `valid: false`, in one sentence to show the user; null when there are none. */
