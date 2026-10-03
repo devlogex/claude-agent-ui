@@ -77,9 +77,31 @@ jobs:
       - run: npm ci
       - run: npm --prefix web ci
 
+      # A step's log is only readable by a repository admin, so a publish that fails for a reason
+      # nobody can read costs a tag and a guess. These two checks are the failures that are not
+      # npm's fault, each turned into a named ::error:: annotation, which anyone can read.
+      - name: Registry auth preflight
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::secrets.NPM_TOKEN is empty in this job. It must exist on the 'npm-publish' environment (Settings -> Environments -> npm-publish -> Add secret) or as a repository secret of exactly that name."
+            exit 1
+          fi
+          if ! who="$(npm whoami 2>&1)"; then
+            echo "::error::npm rejected NPM_TOKEN: $(echo "$who" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "authenticated to npm as $who"
+
       # `npm publish` runs prepublishOnly, which is typecheck + both test suites + the build. The
       # tarball is therefore built here, from this commit, which is the whole point of provenance.
       - name: Publish
-        run: npm publish --provenance --access public --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -o pipefail
+          if ! npm publish --provenance --access public --tag latest 2>&1 | tee publish.log; then
+            echo "::error::npm publish failed: $(tail -n 15 publish.log | tr '\n' ' ')"
+            exit 1
+          fi
