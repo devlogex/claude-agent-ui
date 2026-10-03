@@ -240,6 +240,78 @@ export interface TaskStats {
   maxConcurrent: number;
 }
 
+/* --- Schedules. Mirrors src/domain/schedules.ts; the M5 contract. --------------------- */
+
+/**
+ * What happens when a schedule comes due and the last task it made is not finished.
+ *
+ * `skip` is the default. `queue` fires anyway — except behind a run parked on a permission
+ * prompt, which suppresses the fire under both policies: that run holds its concurrency slot
+ * indefinitely, so stacking behind it has no bound. See `overlap()` in src/domain/schedules.ts.
+ */
+export type OverlapPolicy = "skip" | "queue";
+
+/** Which clock asked for the fire: the cron pattern, or a person pressing "run once now". */
+export type FireTrigger = "cron" | "manual";
+
+export type SkipReason = "previous_run_waiting" | "previous_task_running" | "previous_task_queued";
+
+/** The task template a schedule enqueues. Validated when saved, not only when it fires. */
+export interface ScheduleTask {
+  /** The agent's runName — the literal `claude --agent` takes, not the agent file's id. */
+  agent: string;
+  cwd: string;
+  prompt: string;
+  /** null lets the queue derive one from the prompt, exactly as a hand-made task does. */
+  title: string | null;
+  permissionMode: PermissionMode;
+  unattended: boolean;
+  priority: number;
+  maxAttempts: number;
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** 5- or 6-field; six puts seconds first. Shown raw as well as in English — see lib/cron.ts. */
+  cron: string;
+  /** IANA name. The field people get wrong, so the screen never leaves it implied. */
+  timezone: string;
+  overlapPolicy: OverlapPolicy;
+  task: ScheduleTask;
+  lastFiredAt: number | null;
+  lastTrigger: FireTrigger | null;
+  /** Links the row to the task it made, so "did it work" is one click. */
+  lastTaskId: string | null;
+  lastSkippedAt: number | null;
+  lastSkipReason: SkipReason | null;
+  /** A fire that could not become a task at all — the agent was renamed, the cwd is gone. */
+  lastError: string | null;
+  lastErrorAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /** Computed per request, never stored. Null when the schedule is disabled. */
+  nextFireAt: number | null;
+}
+
+/**
+ * What `run-now` answers — **200 either way**. Being told "not now, the previous run is waiting
+ * on a permission prompt" is the route working, so `fired: false` is a reason to render, never
+ * an error to raise.
+ */
+export type FireResult = { fired: true; taskId: string } | { fired: false; reason: SkipReason };
+
+/** Create and update share a body; on update every field is optional and `task` merges. */
+export interface ScheduleInput {
+  name?: string;
+  enabled?: boolean;
+  cron?: string;
+  timezone?: string;
+  overlapPolicy?: OverlapPolicy;
+  task?: Partial<ScheduleTask>;
+}
+
 export interface TranscriptMessage {
   role: "user" | "assistant";
   text: string;
@@ -329,3 +401,13 @@ export const cancelTask = (id: string) => api.post<TaskView>(`/api/tasks/${id}/c
 /** 201 with a **new** id: retry clones, so the row the user clicked keeps its history. */
 export const retryTask = (id: string) => api.post<TaskView>(`/api/tasks/${id}/retry`);
 export const getTaskTranscript = (id: string) => api.get<TranscriptPage>(`/api/tasks/${id}/transcript`);
+
+export const listSchedules = () => api.get<{ schedules: Schedule[] }>("/api/schedules").then((r) => r.schedules);
+export const createSchedule = (input: ScheduleInput) =>
+  api.post<{ schedule: Schedule }>("/api/schedules", input).then((r) => r.schedule);
+/** `task` merges field by field, so `{ task: { prompt } }` keeps the rest of the template. */
+export const updateSchedule = (id: string, input: ScheduleInput) =>
+  api.put<{ schedule: Schedule }>(`/api/schedules/${id}`, input).then((r) => r.schedule);
+export const deleteSchedule = (id: string) => api.delete<{ ok: true }>(`/api/schedules/${id}`);
+/** Resolves on a suppressed fire too — see {@link FireResult}. */
+export const runScheduleNow = (id: string) => api.post<FireResult>(`/api/schedules/${id}/run-now`);

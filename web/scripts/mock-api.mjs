@@ -362,6 +362,108 @@ const tasks = [
   }),
 ];
 
+/**
+ * Schedules covering every row condition the screen has to tell apart: one that has never
+ * fired, one whose last fire was suppressed, one that failed to enqueue at all, one that is
+ * disabled, and one whose pattern the describer deliberately refuses to put a sentence to.
+ *
+ * All synthetic. Note that no two share a timezone — a schedule read in the wrong zone is the
+ * mistake the Next fire column exists to prevent, and a fixture where every row says
+ * `Europe/London` would never show it.
+ */
+const schedule = (over) => ({
+  enabled: true,
+  timezone: "Europe/London",
+  overlapPolicy: "skip",
+  task: {
+    agent: "release-notes",
+    cwd: "/Users/sam/code/acme-web",
+    prompt: "Summarise what changed since the last tag and draft the release notes.",
+    title: null,
+    permissionMode: "ask",
+    unattended: true,
+    priority: 0,
+    maxAttempts: 1,
+  },
+  lastFiredAt: null,
+  lastTrigger: null,
+  lastTaskId: null,
+  lastSkippedAt: null,
+  lastSkipReason: null,
+  lastError: null,
+  lastErrorAt: null,
+  createdAt: now - 400 * 60 * 60_000,
+  updatedAt: now - 400 * 60 * 60_000,
+  // Computed per request by the real server. The mock stores it, since it has no cron engine.
+  nextFireAt: now + 13 * 60 * 60_000,
+  ...over,
+});
+
+const schedules = [
+  schedule({
+    id: "sc-1",
+    name: "Nightly dependency audit",
+    cron: "0 3 * * *",
+    task: {
+      agent: "dependency-audit",
+      cwd: "/Users/sam/code/acme-api",
+      prompt: "Read the lockfile and list only the advisories that actually reach the running app.",
+      title: null,
+      permissionMode: "ask",
+      unattended: true,
+      priority: 0,
+      maxAttempts: 1,
+    },
+  }),
+  schedule({
+    id: "sc-2",
+    name: "Weekday release notes",
+    cron: "0 9 * * 1-5",
+    timezone: "Asia/Ho_Chi_Minh",
+    lastFiredAt: now - 27 * 60 * 60_000,
+    lastTrigger: "cron",
+    lastTaskId: "t-4f19",
+    // Newer than the fire, so this is what the row explains.
+    lastSkippedAt: now - 3 * 60 * 60_000,
+    lastSkipReason: "previous_run_waiting",
+    nextFireAt: now + 21 * 60 * 60_000,
+  }),
+  schedule({
+    id: "sc-3",
+    name: "Hourly changelog tidy",
+    cron: "0 * * * *",
+    timezone: "America/New_York",
+    overlapPolicy: "queue",
+    lastFiredAt: now - 41 * 60_000,
+    lastTrigger: "manual",
+    lastTaskId: "t-91a2",
+    nextFireAt: now + 19 * 60_000,
+  }),
+  schedule({
+    id: "sc-4",
+    name: "Monthly advisory sweep",
+    cron: "0 2 1 * *",
+    enabled: false,
+    // Disabled schedules have no next fire, and the screen must never invent one.
+    nextFireAt: null,
+  }),
+  schedule({
+    id: "sc-5",
+    // Day-of-month AND day-of-week: legal cron, ORed, and no short sentence says that honestly.
+    name: "Quarter-day custom pattern",
+    cron: "0 9 1 * 1",
+    nextFireAt: now + 2 * 24 * 60 * 60_000,
+  }),
+  schedule({
+    id: "sc-6",
+    name: "Search index backfill",
+    cron: "30 4 * * *",
+    lastError: "working directory does not exist: /Users/sam/code/acme-search",
+    lastErrorAt: now - 9 * 60 * 60_000,
+    nextFireAt: now + 14 * 60 * 60_000,
+  }),
+];
+
 const TRANSCRIPT = {
   messages: [
     {
@@ -516,6 +618,10 @@ createServer((req, res) => {
     });
   }
 
+  // Deliberately no POST /api/schedules: a write path that only pretends to write is worse
+  // than no write path. Exercise create against a real server started with a throwaway HOME —
+  // see scripts/shoot-schedules.mjs.
+
   if (url.pathname === "/api/tasks" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -540,6 +646,73 @@ createServer((req, res) => {
       json(res, 201, created);
     });
     return;
+  }
+
+  if (url.pathname === "/api/schedules" && req.method === "GET") {
+    return json(res, 200, { schedules: scenario === "empty" ? [] : schedules });
+  }
+
+  const scheduleMatch = /^\/api\/schedules\/([^/]+)(\/run-now)?$/.exec(url.pathname);
+  if (scheduleMatch) {
+    const found = schedules.find((s) => s.id === scheduleMatch[1]);
+    if (!found) return json(res, 404, { error: "schedule not found" });
+
+    if (scheduleMatch[2] === "/run-now") {
+      // 200 either way, like the real route. `sc-2`'s previous run is parked on a permission
+      // prompt, which suppresses the fire under *both* overlap policies — the one behaviour
+      // on this screen worth being able to see on demand.
+      if (found.id === "sc-2") {
+        found.lastSkippedAt = Date.now();
+        found.lastSkipReason = "previous_run_waiting";
+        broadcast("schedule:skipped", { scheduleId: found.id, reason: found.lastSkipReason, trigger: "manual" });
+        return json(res, 200, { fired: false, reason: found.lastSkipReason });
+      }
+      const created = task({
+        id: `t-${Math.random().toString(16).slice(2, 6)}`,
+        title: found.task.title ?? found.name,
+        agent: found.task.agent,
+        cwd: found.task.cwd,
+        prompt: found.task.prompt,
+        state: "queued",
+        scheduleId: found.id,
+        createdAt: Date.now(),
+        queuePosition: tasks.filter((t) => t.state === "queued").length + 1,
+      });
+      tasks.push(created);
+      found.lastFiredAt = created.createdAt;
+      found.lastTrigger = "manual";
+      found.lastTaskId = created.id;
+      broadcast("task:created", { taskId: created.id });
+      broadcast("schedule:fired", { scheduleId: found.id, taskId: created.id, trigger: "manual" });
+      return json(res, 200, { fired: true, taskId: created.id });
+    }
+
+    if (req.method === "DELETE") {
+      schedules.splice(schedules.indexOf(found), 1);
+      broadcast("schedule:removed", { scheduleId: found.id });
+      return json(res, 200, { ok: true });
+    }
+
+    if (req.method === "PUT") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const sent = JSON.parse(body || "{}");
+        for (const key of ["name", "cron", "timezone", "overlapPolicy"]) {
+          if (sent[key] !== undefined) found[key] = sent[key];
+        }
+        if (typeof sent.enabled === "boolean") {
+          found.enabled = sent.enabled;
+          // A disabled schedule has no next fire; the real server computes null for it.
+          found.nextFireAt = sent.enabled ? Date.now() + 13 * 60 * 60_000 : null;
+        }
+        if (sent.task) Object.assign(found.task, sent.task);
+        found.updatedAt = Date.now();
+        broadcast("schedule:updated", { scheduleId: found.id });
+        json(res, 200, { schedule: found });
+      });
+      return;
+    }
   }
 
   const taskMatch = /^\/api\/tasks\/([^/]+)(\/[a-z]+)?$/.exec(url.pathname);

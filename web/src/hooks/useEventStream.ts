@@ -25,6 +25,15 @@ const INVALIDATES: Record<string, readonly (readonly unknown[])[] | null> = {
   [SERVER_EVENTS.taskCreated]: [queryKeys.tasks],
   [SERVER_EVENTS.taskUpdated]: [queryKeys.tasks],
   [SERVER_EVENTS.taskRemoved]: [queryKeys.tasks],
+  [SERVER_EVENTS.scheduleCreated]: [queryKeys.schedules],
+  [SERVER_EVENTS.scheduleUpdated]: [queryKeys.schedules],
+  [SERVER_EVENTS.scheduleRemoved]: [queryKeys.schedules],
+  // A fire makes a task, so both lists move. Skipped and failed only write to the schedule —
+  // but they write `lastSkipReason` / `lastError`, which is the whole answer to "why did my
+  // 09:00 not run", so the row has to re-read to show it.
+  [SERVER_EVENTS.scheduleFired]: [queryKeys.schedules, queryKeys.tasks],
+  [SERVER_EVENTS.scheduleSkipped]: [queryKeys.schedules],
+  [SERVER_EVENTS.scheduleFailed]: [queryKeys.schedules],
   // A definition's own cache entry goes too: the detail pane holds the file contents, which an
   // edit in another tab has just replaced.
   [SERVER_EVENTS.agentCreated]: [queryKeys.agents],

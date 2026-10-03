@@ -29,6 +29,19 @@ export const SERVER_EVENTS = {
   taskCreated: "task:created",
   taskUpdated: "task:updated",
   taskRemoved: "task:removed",
+  /**
+   * The scheduler's notifications. `fired` and `skipped` carry their outcome inline
+   * (`{ taskId, trigger }` / `{ reason, trigger }`) and `failed` carries `{ error }`, but the
+   * client still re-reads `/api/schedules`: the same facts are recorded on the schedule itself,
+   * so a tab that was asleep for an event is not left with a different story from one that
+   * was not. See SCHEDULE_EVENTS in ../../src/events.ts.
+   */
+  scheduleCreated: "schedule:created",
+  scheduleUpdated: "schedule:updated",
+  scheduleRemoved: "schedule:removed",
+  scheduleFired: "schedule:fired",
+  scheduleSkipped: "schedule:skipped",
+  scheduleFailed: "schedule:failed",
   agentCreated: "agent:created",
   agentUpdated: "agent:updated",
   agentRemoved: "agent:removed",
