@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { TESTED_CLI_MAJOR, parseCliVersion } from "../src/claude/claudeCli.ts";
 import { checkClaudeBinary, checkClaudeCliVersion, checkNodeVersion, main, readVersion } from "../src/cli.ts";
-import { tempHome } from "./helpers.ts";
+import { fakeClaudeBin, tempHome } from "./helpers.ts";
 
 test("the Node preflight explains what to do, and passes on supported versions", () => {
   assert.match(checkNodeVersion("v18.20.0")!, /needs Node 20 or newer/);
@@ -91,7 +91,7 @@ test("--port 0 prints a URL the server actually serves", async () => {
     "--data-dir",
     path.join(home, ".claude-agent-ui"),
     "--claude-bin",
-    process.execPath,
+    await fakeClaudeBin(),
     // Without this the default would launch a real browser on whoever runs the suite.
     "--no-open",
   ]);
@@ -103,9 +103,33 @@ test("--port 0 prints a URL the server actually serves", async () => {
     const res = await fetch(`${url}/api/config`);
     assert.equal(res.status, 200);
     assert.equal(((await res.json()) as { permissionMode: string }).permissionMode, "ask");
-    // The stand-in binary is node, which reports its own major, so the untested-version warning is
-    // expected here — on stderr, where it cannot corrupt the URL on stdout, and not fatal.
+    // A supported CLI starts in silence. Nothing on stderr at all, so the warning below is a
+    // signal rather than one more line in a startup that always says something.
+    assert.equal(err, "");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("an untested CLI major warns on stderr and starts anyway", async () => {
+  const home = await tempHome();
+  const { server, out, err } = await runMain([
+    "--port",
+    "0",
+    "--data-dir",
+    path.join(home, ".claude-agent-ui"),
+    "--claude-bin",
+    await fakeClaudeBin(`${TESTED_CLI_MAJOR + 1}.0.0`),
+    "--no-open",
+  ]);
+  // Starting is the point: an untested CLI is usually fine, and refusing would strand someone
+  // on the day the CLI bumps.
+  assert.ok(server, "an untested CLI major must not stop the server starting");
+  try {
     assert.match(err, /Warning: Claude Code CLI .* has not been tested against/);
+    // stderr, so redirecting stdout to capture the URL does not swallow the warning — and so the
+    // warning can never be mistaken for part of the URL line.
+    assert.match(out, /Claude Agent UI: http:\/\/127\.0\.0\.1:\d+/);
     assert.doesNotMatch(out, /Warning:/);
   } finally {
     await new Promise((resolve) => server.close(resolve));

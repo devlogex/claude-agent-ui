@@ -1,9 +1,28 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { TESTED_CLI_MAJOR } from "../src/claude/claudeCli.ts";
 
 export async function tempHome(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agent-ui-test-"));
+}
+
+/**
+ * Writes a stand-in `claude` that answers `--version` and nothing else, and returns its path.
+ *
+ * Any test that boots `main()` needs one: the startup preflight runs the binary, and pointing at
+ * `process.execPath` meant every such test printed the untested-major warning about Node's own
+ * version. Defaults to the version this release is built for, so the suite is quiet unless a test
+ * is specifically about a version that is not.
+ *
+ * A node script with a shebang rather than a shell one — CI is Linux and development is macOS,
+ * and this way there is no `sh` syntax to be wrong about.
+ */
+export async function fakeClaudeBin(version = `${TESTED_CLI_MAJOR}.1.288`): Promise<string> {
+  const bin = path.join(await tempHome(), "claude");
+  await writeFile(bin, `#!/usr/bin/env node\nprocess.stdout.write("${version} (Claude Code)\\n");\n`);
+  await chmod(bin, 0o755);
+  return bin;
 }
 
 export async function put(file: string, content: string): Promise<void> {

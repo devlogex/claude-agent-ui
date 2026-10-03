@@ -7,17 +7,20 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { LOCK_FILE } from "../src/store/lockfile.ts";
-import { tempHome } from "./helpers.ts";
+import { fakeClaudeBin, tempHome } from "./helpers.ts";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(REPO_ROOT, "src", "cli.ts");
 
 /** Starts the real bin entry in its own process, and resolves with its URL once it is listening. */
 async function startServer(dataDir: string): Promise<{ child: ChildProcess; port: number }> {
+  // A stub that reports a supported version, so the preflight neither needs a real claude on PATH
+  // nor warns about an untested one — this child's stderr is inherited, so a warning here would
+  // land in the suite's own output.
+  const claudeBin = await fakeClaudeBin();
   const child = spawn(
     process.execPath,
-    // --claude-bin node satisfies the preflight without needing a real claude on PATH.
-    ["--import", "tsx", CLI, "--port", "0", "--data-dir", dataDir, "--claude-bin", process.execPath, "--no-open"],
+    ["--import", "tsx", CLI, "--port", "0", "--data-dir", dataDir, "--claude-bin", claudeBin, "--no-open"],
     { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "inherit"] },
   );
   let out = "";

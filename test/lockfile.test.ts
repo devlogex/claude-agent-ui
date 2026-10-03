@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { main } from "../src/cli.ts";
 import { ConfigError } from "../src/config.ts";
 import { LOCK_FILE, LockError, acquireLock, isProcessAlive } from "../src/store/lockfile.ts";
-import { tempHome } from "./helpers.ts";
+import { fakeClaudeBin, tempHome } from "./helpers.ts";
 
 const never = () => false;
 const always = () => true;
@@ -124,16 +124,17 @@ test("release leaves a lockfile it cannot read, rather than throwing out of the 
 });
 
 /** Starts a server through main() the way the bin entry does, minus the browser. */
-function start(dataDir: string) {
-  return main(["--port", "0", "--data-dir", dataDir, "--claude-bin", process.execPath, "--no-open"]);
+function start(dataDir: string, claudeBin: string) {
+  return main(["--port", "0", "--data-dir", dataDir, "--claude-bin", claudeBin, "--no-open"]);
 }
 
 test("two servers on one state directory: the second exits with the first one's PID", async () => {
+  const claudeBin = await fakeClaudeBin();
   const dataDir = path.join(await tempHome(), ".claude-agent-ui");
-  const server = await start(dataDir);
+  const server = await start(dataDir, claudeBin);
   assert.ok(server);
   try {
-    await assert.rejects(start(dataDir), (err: unknown) => {
+    await assert.rejects(start(dataDir, claudeBin), (err: unknown) => {
       assert.ok(err instanceof ConfigError, `expected a ConfigError, got ${String(err)}`);
       assert.match(err.message, new RegExp(`PID ${process.pid}\\b`));
       assert.doesNotMatch(err.message, /at .*:\d+:\d+/, "the message must not be a stack trace");
@@ -143,7 +144,7 @@ test("two servers on one state directory: the second exits with the first one's 
     await new Promise((resolve) => server.close(resolve));
   }
   // Once the first server is down the directory is free again.
-  const third = await start(dataDir);
+  const third = await start(dataDir, claudeBin);
   assert.ok(third);
   await new Promise((resolve) => third.close(resolve));
 });
