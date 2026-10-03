@@ -10,6 +10,7 @@ import {
 } from "../claude/claudeCli.ts";
 import { findTranscript, readFinalMessage } from "../claude/transcript.ts";
 import { expandHome } from "../config.ts";
+import { type EventBus, RUN_EVENTS } from "../events.ts";
 import { JsonStore } from "../store/jsonStore.ts";
 
 /** "unknown" = `claude agents --json` could not be read this time. */
@@ -68,11 +69,14 @@ export interface StartRunOptions {
 export interface RunStoreOptions {
   dataDir?: string;
   historyLimit?: number;
+  /** Where `run:*` events go; omitted in tests that do not care about them. */
+  bus?: EventBus;
 }
 
 export class RunStore {
   private readonly store: JsonStore<RunRecord[]>;
   private readonly historyLimit: number;
+  private readonly bus?: EventBus;
   private finalCache = new Map<string, { mtimeMs: number; text: string | null; timestamp: string | null }>();
 
   constructor(
@@ -84,6 +88,12 @@ export class RunStore {
     const dataDir = opts.dataDir ?? path.join(home, ".claude-agent-ui");
     this.store = new JsonStore<RunRecord[]>(path.join(dataDir, "runs.json"), () => []);
     this.historyLimit = opts.historyLimit ?? DEFAULT_HISTORY_LIMIT;
+    this.bus = opts.bus;
+  }
+
+  /** Events carry an id only; a client that gets one re-reads /api/runs. */
+  private announce(type: string, runId: string): void {
+    this.bus?.emit(type, { runId });
   }
 
   private async load(): Promise<RunRecord[]> {
@@ -140,6 +150,7 @@ export class RunStore {
       runs.unshift(record);
       if (runs.length > this.historyLimit) runs.length = this.historyLimit;
     });
+    this.announce(RUN_EVENTS.started, runId);
     return record;
   }
 
@@ -225,6 +236,7 @@ export class RunStore {
     } catch (err) {
       throw new RunError(`claude stop failed: ${(err as Error).message}`, 502);
     }
+    this.announce(RUN_EVENTS.stopped, runId);
   }
 
   async remove(runId: string): Promise<void> {
@@ -241,6 +253,7 @@ export class RunStore {
       const i = runs.findIndex((r) => r.runId === runId);
       if (i >= 0) runs.splice(i, 1);
     });
+    this.announce(RUN_EVENTS.removed, runId);
   }
 
   async stopFinished(): Promise<string[]> {
@@ -250,6 +263,7 @@ export class RunStore {
       try {
         await this.cli.stop(run.runId);
         stopped.push(run.runId);
+        this.announce(RUN_EVENTS.stopped, run.runId);
       } catch {
         // keep going; the panel will still show it as finished
       }

@@ -6,6 +6,8 @@ import { ClaudeCli, DEFAULT_PERMISSION_MODE, type PermissionMode } from "./claud
 import { discoverAgents, findAgent, toPublic } from "./domain/agents.ts";
 import { NEW_AGENT_TEMPLATE, ValidationError, createAgent, updateAgent } from "./domain/agentStore.ts";
 import { RunError, RunStore } from "./domain/runs.ts";
+import { EventBus } from "./events.ts";
+import { streamEvents } from "./sse.ts";
 
 /** The only address this server ever binds. There is deliberately no option to change it. */
 export const HOST = "127.0.0.1";
@@ -48,18 +50,24 @@ export interface AppOptions {
   historyLimit?: number;
   /** Directory holding the built web client; defaults to `web/` next to this module. */
   webRoot?: string;
+  /** The bus /api/events streams; one is created when the caller does not supply it. */
+  bus?: EventBus;
 }
 
 export function createApp(opts: AppOptions) {
   const { home } = opts;
   const permissionMode = opts.permissionMode ?? DEFAULT_PERMISSION_MODE;
+  const bus = opts.bus ?? new EventBus();
   const runs = new RunStore(home, opts.cli, opts.starterPrompt, {
     dataDir: opts.dataDir,
     historyLimit: opts.historyLimit,
+    bus,
   });
   const webRoot = opts.webRoot ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
 
   const app = express();
+  // Published so later subsystems (the task queue, the scheduler) emit onto the same bus.
+  app.locals.bus = bus;
   app.use(loopbackGuard(opts.port));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.static(webRoot));
@@ -75,6 +83,12 @@ export function createApp(opts: AppOptions) {
       permissionMode,
       template: NEW_AGENT_TEMPLATE,
     });
+  });
+
+  // The only push channel in the product: nothing here polls. The response is owned by
+  // streamEvents from this point on, so the handler must not touch res afterwards.
+  app.get("/api/events", (req, res) => {
+    streamEvents(bus, req, res);
   });
 
   app.get(

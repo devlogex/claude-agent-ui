@@ -6,6 +6,16 @@
  * capped, and a slow subscriber can be dropped instead of being buffered without limit.
  */
 
+/**
+ * Event names are `<namespace>:<verb>`. The namespaces are `run`, `task` and `schedule`; clients
+ * subscribe to the ones they care about and re-read the matching resource when one arrives.
+ */
+export const RUN_EVENTS = {
+  started: "run:started",
+  stopped: "run:stopped",
+  removed: "run:removed",
+} as const;
+
 export interface BusEvent<T = unknown> {
   /** Monotonic within one server process; used as the SSE `id:` field. */
   id: number;

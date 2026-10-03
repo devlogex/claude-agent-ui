@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { type BackgroundSession, CliError, ClaudeCli, type StartBackgroundOptions } from "../src/claude/claudeCli.ts";
 import { MAX_PROMPT_LENGTH, RunStore, mapStatus } from "../src/domain/runs.ts";
+import { type BusEvent, EventBus } from "../src/events.ts";
 import { put, tempHome } from "./helpers.ts";
 
 test("mapStatus: busy→running, idle→finished, stopped, missing", () => {
@@ -49,10 +50,14 @@ class FakeCli extends ClaudeCli {
   }
 }
 
-async function setup(opts: { historyLimit?: number } = {}) {
+async function setup(opts: { historyLimit?: number; bus?: EventBus } = {}) {
   const home = await tempHome();
   const cli = new FakeCli();
-  return { home, cli, store: new RunStore(home, cli, "Start your task.", { historyLimit: opts.historyLimit }) };
+  return {
+    home,
+    cli,
+    store: new RunStore(home, cli, "Start your task.", { historyLimit: opts.historyLimit, bus: opts.bus }),
+  };
 }
 
 const runsFile = (home: string) => path.join(home, ".claude-agent-ui", "runs.json");
@@ -239,4 +244,30 @@ test("history is capped: the oldest runs fall off instead of growing forever", a
     saved.map((r: any) => r.runId),
     ["abcd1238", "abcd1237", "abcd1236"],
   );
+});
+
+test("a run start, stop and removal each announce themselves on the bus", async () => {
+  const bus = new EventBus();
+  const seen: BusEvent[] = [];
+  bus.subscribe((e) => seen.push(e));
+  const { home, store } = await setup({ bus });
+
+  const run = await store.start("a", home);
+  await store.stop(run.runId);
+  await store.remove(run.runId);
+
+  assert.deepEqual(
+    seen.map((e) => e.type),
+    ["run:started", "run:stopped", "run:removed"],
+  );
+  // The payload is an identifier, not a copy of the record: clients re-read /api/runs.
+  assert.deepEqual(seen[0].data, { runId: run.runId });
+});
+
+test("a failed start announces nothing", async () => {
+  const bus = new EventBus();
+  const { home, cli, store } = await setup({ bus });
+  cli.startError = "boom";
+  await assert.rejects(store.start("a", home));
+  assert.equal(bus.lastEventId, 0);
 });
