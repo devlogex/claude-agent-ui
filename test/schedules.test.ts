@@ -410,6 +410,76 @@ test("a previous run parked on a permission prompt suppresses the fire under BOT
     assert.equal((await ctx.queue.list()).tasks.length, 2);
   }));
 
+test("fires that land at the same instant are serialized, so skip still means one task", () =>
+  withScheduler(async (ctx) => {
+    // The cron clock, a `POST /run-now` and a second browser tab can all arrive inside the same
+    // tick. The check is three awaits long, so without serialization all three read "no previous
+    // task" and all three enqueue — the UI's busy flag only ever guarded one row in one tab.
+    const schedule = await ctx.scheduler.create({ name: "n", cron: "0 3 * * *", task: template(ctx.home) });
+    const results = await Promise.all([
+      ctx.scheduler.fire(schedule.id, "cron"),
+      ctx.scheduler.runNow(schedule.id),
+      ctx.scheduler.runNow(schedule.id),
+    ]);
+
+    assert.equal(results.filter((r) => r.fired).length, 1);
+    assert.equal((await ctx.queue.list()).tasks.length, 1);
+    // And the two that lost are recorded and emitted like any other skip, not dropped silently.
+    assert.deepEqual(
+      results.filter((r) => !r.fired),
+      [
+        { fired: false, reason: "previous_task_queued" },
+        { fired: false, reason: "previous_task_queued" },
+      ],
+    );
+    assert.equal(ctx.events.filter((e) => e.type === SCHEDULE_EVENTS.skipped).length, 2);
+    assert.equal((await ctx.scheduler.get(schedule.id)).lastSkipReason, "previous_task_queued");
+  }));
+
+test("the race cannot leave a second task stacked behind a run that then blocks", () =>
+  withScheduler(async (ctx) => {
+    // Why the race is worse than a duplicate task. Two fires that both get through leave a second
+    // task queued; when the first run then parks on a permission prompt it holds its slot
+    // indefinitely, and the second is already stacked behind it — the exact pile-up the CEO rule
+    // forbids. The rule is enforced at the only moment it can be, before the second task exists.
+    const schedule = await ctx.scheduler.create({ name: "n", cron: "0 3 * * *", task: template(ctx.home) });
+    await Promise.all([ctx.scheduler.fire(schedule.id, "cron"), ctx.scheduler.runNow(schedule.id)]);
+
+    await ctx.queue.tick();
+    ctx.cli.wait("run1");
+    await ctx.queue.tick();
+    const tasks = (await ctx.queue.list()).tasks;
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].waiting?.reason, "permission");
+
+    // And with the blocked run holding its slot, the next fire is refused for that reason.
+    assert.deepEqual(await ctx.scheduler.fire(schedule.id, "cron"), {
+      fired: false,
+      reason: "previous_run_waiting",
+    });
+  }));
+
+test("a fire that throws does not wedge the next fire of the same schedule", () =>
+  withScheduler(async (ctx) => {
+    // The serialization chain has to carry on through a rejection. If it did not, one deleted
+    // working directory would stop that schedule firing for the lifetime of the process.
+    const cwd = path.join(ctx.home, "gone");
+    await mkdir(cwd, { recursive: true });
+    const schedule = await ctx.scheduler.create({
+      name: "n",
+      cron: "0 3 * * *",
+      task: { ...template(ctx.home), cwd },
+    });
+    await rm(cwd, { recursive: true, force: true });
+    await assert.rejects(() => ctx.scheduler.fire(schedule.id, "cron"), /does not exist/);
+
+    await ctx.scheduler.update(schedule.id, { task: { cwd: ctx.home } });
+    firedTaskId(await ctx.scheduler.fire(schedule.id, "cron"));
+    assert.equal((await ctx.queue.list()).tasks.length, 1);
+    // The repaired fire clears the stale complaint rather than leaving it to be read tomorrow.
+    assert.equal((await ctx.scheduler.get(schedule.id)).lastError, null);
+  }));
+
 test("a fire whose template can no longer be enqueued records the failure and reports it", () =>
   withScheduler(async (ctx) => {
     // The working directory was valid when the schedule was saved, and is deleted afterwards.

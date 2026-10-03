@@ -676,3 +676,29 @@ test("transcript is empty for a queued task, structured once it has run, and 404
   });
   await assert.rejects(queue.transcript("nope"), (err: any) => err.status === 404);
 });
+
+test("the newest task of a schedule wins, even when two land in the same millisecond", async () => {
+  // The scheduler's overlap check reads this and nothing else does: "is the task I started last
+  // time still going?". Two tasks can be created inside one millisecond, and a sort over equal
+  // keys is stable — it would hand back the *older* one, hiding a newer task that is running or
+  // blocked. Later wins instead, because tasks are appended in creation order.
+  const { queue } = await harness();
+  const realNow = Date.now;
+  Date.now = () => 1_767_225_600_000;
+  let first: string;
+  let second: string;
+  try {
+    first = (await queue.create({ agent: "alpha", prompt: "first", scheduleId: "sched-1" })).id;
+    second = (await queue.create({ agent: "alpha", prompt: "second", scheduleId: "sched-1" })).id;
+  } finally {
+    Date.now = realNow;
+  }
+  const other = await queue.create({ agent: "alpha", prompt: "other", scheduleId: "sched-2" });
+
+  const latest = await queue.latestForSchedule("sched-1");
+  assert.notEqual(first, second);
+  assert.equal(latest?.id, second);
+  // A schedule that has never fired has no latest, and one schedule never reads another's.
+  assert.equal((await queue.latestForSchedule("sched-2"))?.id, other.id);
+  assert.equal(await queue.latestForSchedule("sched-3"), undefined);
+});

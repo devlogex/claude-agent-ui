@@ -222,6 +222,8 @@ export class Scheduler {
   private readonly bus?: EventBus;
   private readonly now: () => number;
   private readonly jobs = new Map<string, Cron>();
+  /** Tail of the in-flight {@link fire} chain per schedule id. See {@link serialize}. */
+  private readonly fireChains = new Map<string, Promise<unknown>>();
   private running = false;
 
   constructor(
@@ -399,13 +401,47 @@ export class Scheduler {
   }
 
   /**
+   * Runs `fn` after every earlier call for the same schedule has settled.
+   *
+   * The overlap check is a read of the schedule, a read of the queue and then a write to the
+   * queue — three awaits. Without this, two fires that interleave both read "no previous task"
+   * and both enqueue, which is a hole in `skip` and, worse, in the `waiting` rule, whose whole
+   * point is that a second run is never stacked behind a blocked one. A tail chain per id puts
+   * the check and the `tasks.create()` in one critical section.
+   *
+   * Per *process*, which is the whole story: M1 locks the data directory, so one process per data
+   * dir is the only arrangement there is (see the note at the top of this file).
+   *
+   * What the map holds is the *caught* tail, not the caller's promise: a fire that throws — a
+   * deleted working directory — must not wedge every later fire of that schedule, and must not
+   * become an unhandled rejection on its way past. The entry is dropped once idle, so the map
+   * stays the size of the work in flight rather than growing a key per schedule that ever fired.
+   */
+  private serialize<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const result = (this.fireChains.get(id) ?? Promise.resolve()).then(fn);
+    const tail = result.catch(() => {});
+    this.fireChains.set(id, tail);
+    void tail.then(() => {
+      if (this.fireChains.get(id) === tail) this.fireChains.delete(id);
+    });
+    return result;
+  }
+
+  /**
    * Enqueues this schedule's task, unless the overlap check says not to.
    *
    * Throws when the template can no longer be turned into a task — the agent was renamed, the
    * working directory was deleted. The failure is recorded and emitted first, so the cron path
    * can drop the throw without losing it and the run-now path can answer with it.
+   *
+   * Serialized per schedule id: see {@link serialize} for why the check and the enqueue cannot be
+   * allowed to interleave.
    */
-  async fire(id: string, trigger: FireTrigger): Promise<FireResult> {
+  fire(id: string, trigger: FireTrigger): Promise<FireResult> {
+    return this.serialize(id, () => this.fireOnce(id, trigger));
+  }
+
+  private async fireOnce(id: string, trigger: FireTrigger): Promise<FireResult> {
     const record = await this.require(id);
     const reason = await this.overlap(record);
     if (reason) {

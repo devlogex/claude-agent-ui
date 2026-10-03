@@ -288,9 +288,17 @@ export class TaskQueue {
    * This is the scheduler's overlap check and nothing else reads it: the schedule asks "is the one
    * I started last time still going?" before starting another. Newest by `createdAt`, because the
    * question is about the most recent fire, not about whatever finished most recently.
+   *
+   * A tie in `createdAt` goes to the later entry: tasks are appended in creation order, and two
+   * can land in the same millisecond. A sort would keep the *first* of an equal pair — handing the
+   * overlap check the older task and letting a blocked newer one through unseen.
    */
   async latestForSchedule(scheduleId: string): Promise<TaskRecord | undefined> {
-    return (await this.load()).filter((t) => t.scheduleId === scheduleId).sort((a, b) => b.createdAt - a.createdAt)[0];
+    let latest: TaskRecord | undefined;
+    for (const task of await this.load()) {
+      if (task.scheduleId === scheduleId && (!latest || task.createdAt >= latest.createdAt)) latest = task;
+    }
+    return latest;
   }
 
   private async require(id: string): Promise<TaskRecord> {
