@@ -11,6 +11,14 @@
     "local"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devlogex/claude-agent-ui.git"
+  },
+  "homepage": "https://github.com/devlogex/claude-agent-ui#readme",
+  "bugs": {
+    "url": "https://github.com/devlogex/claude-agent-ui/issues"
+  },
   "bin": {
     "claude-agent-ui": "dist/cli.js"
   },
