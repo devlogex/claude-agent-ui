@@ -9,7 +9,7 @@
  *
  * All content is synthetic. No real paths, no real session ids.
  *
- *   node scripts/mock-api.mjs [--port 3000] [--scenario populated|empty|error]
+ *   node scripts/mock-api.mjs [--port 3000] [--scenario populated|empty|error|stale|lostrace]
  *
  * While it runs, POST /__mock/start-run pushes a run:started event; the status bar must move.
  */
@@ -521,6 +521,18 @@ createServer((req, res) => {
     if (action === "/cancel") {
       if (found.state !== "queued" && found.state !== "running" && found.state !== "cancelled") {
         return json(res, 409, { error: "that task already finished" });
+      }
+      // tasks-api-contract rev 4: a running task can settle while `claude stop` is in flight,
+      // and the first terminal write wins — so cancel answers 200 with the outcome the task
+      // actually reached. `--scenario lostrace` is the only way to see that on demand.
+      if (scenario === "lostrace" && found.state === "running") {
+        found.state = "succeeded";
+        found.result = "Finished the run before the stop request landed.";
+        found.finishedAt = Date.now();
+        found.waiting = null;
+        found.queuePosition = null;
+        broadcast("task:updated", { taskId: found.id });
+        return json(res, 200, found);
       }
       found.state = "cancelled";
       found.finishedAt = Date.now();

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { TaskView } from "./api.ts";
-import { duration, ordinal, pathTail, taskBadge, taskGroup, taskReason, taskTiming } from "./taskStatus.ts";
+import {
+  cancelOutcome,
+  duration,
+  ordinal,
+  pathTail,
+  taskBadge,
+  taskGroup,
+  taskReason,
+  taskTiming,
+} from "./taskStatus.ts";
 
 const BASE: TaskView = {
   id: "t-1",
@@ -28,6 +37,32 @@ const BASE: TaskView = {
 };
 
 const task = (over: Partial<TaskView>): TaskView => ({ ...BASE, ...over });
+
+describe("cancelOutcome", () => {
+  it("says cancelled only when the server says cancelled", () => {
+    expect(cancelOutcome(task({ state: "cancelled" }), "Draft the release notes")).toBe(
+      'Cancelled "Draft the release notes".',
+    );
+    expect(cancelOutcome(task({ state: "cancelled" }))).toBe("Cancelled.");
+  });
+
+  // tasks-api-contract rev 4: a task that settles while `claude stop` is in flight answers 200
+  // with the outcome it actually reached. Announcing "Cancelled" there is the one lie the
+  // screen could still tell, since every rendered row re-reads from the server.
+  it("names the real outcome when the cancel lost the race", () => {
+    for (const [state, word] of [
+      ["succeeded", "Succeeded"],
+      ["failed", "Failed"],
+      ["blocked", "Blocked"],
+    ] as const) {
+      const message = cancelOutcome(task({ state }), "Draft the release notes");
+      expect(message).toBe(`"Draft the release notes" finished before it could be stopped — ${word}.`);
+      expect(message).not.toMatch(/Cancelled/);
+      // The titleless form is for the detail pane, which is already headed by the title.
+      expect(cancelOutcome(task({ state }))).toBe(`It finished before it could be stopped — ${word}.`);
+    }
+  });
+});
 
 describe("taskBadge", () => {
   it("covers all eight conditions, each with a word of its own", () => {
@@ -81,7 +116,11 @@ describe("taskTiming", () => {
     expect(taskTiming(task({ state: "running", startedAt: now - 120_000 }), 0, now)).toMatch(/^started /);
     expect(
       taskTiming(
-        task({ state: "running", startedAt: now - 600_000, waiting: { reason: "permission", detail: "", since: now - 120_000 } }),
+        task({
+          state: "running",
+          startedAt: now - 600_000,
+          waiting: { reason: "permission", detail: "", since: now - 120_000 },
+        }),
         0,
         now,
       ),
@@ -112,9 +151,9 @@ describe("taskReason", () => {
     expect(
       taskReason(task({ state: "running", waiting: { reason: "permission", detail: "permission prompt", since: 1 } })),
     ).toBeNull();
-    expect(
-      taskReason(task({ state: "running", waiting: { reason: "other", detail: "dialog open", since: 1 } })),
-    ).toBe("dialog open");
+    expect(taskReason(task({ state: "running", waiting: { reason: "other", detail: "dialog open", since: 1 } }))).toBe(
+      "dialog open",
+    );
   });
 
   it("renders nothing rather than a stand-in when the wait has no named reason", () => {

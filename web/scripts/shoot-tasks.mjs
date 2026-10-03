@@ -13,14 +13,15 @@
 import { chromium } from "playwright";
 import path from "node:path";
 
-const out = process.argv[2] ?? ".";
+const args = process.argv.slice(2);
+const out = args[0] ?? ".";
 const base = "http://127.0.0.1:5174";
 const shot = (name) => path.join(out, `${name}.png`);
 
 const browser = await chromium.launch({ channel: "chrome" });
 const allErrors = [];
 
-async function capture(name, { theme = "dark", url = "/tasks", width = 1440, height = 900, before } = {}) {
+async function capture(name, { theme = "dark", url = "/tasks", width = 1440, height = 900, before, after } = {}) {
   const context = await browser.newContext({
     viewport: { width, height },
     deviceScaleFactor: 2,
@@ -39,6 +40,9 @@ async function capture(name, { theme = "dark", url = "/tasks", width = 1440, hei
   }
   await page.screenshot({ path: shot(name) });
   console.log(`${name}  ${width}x${height} ${theme}${errors.length ? "  CONSOLE ERRORS" : ""}`);
+  // Anything that has to be read out of the DOM rather than photographed — an sr-only live
+  // region, for one — runs here, while the page is still open.
+  if (after) await after(page);
   await context.close();
   allErrors.push(...errors);
   return page;
@@ -112,13 +116,57 @@ await capture("t14-focus-row-cancel-dark", {
 await capture("t15-tasks-mobile-dark", { width: 390, height: 844 });
 await capture("t16-detail-mobile-light", { theme: "light", url: "/tasks/t-91a2", width: 390, height: 844 });
 
+// --- A cancel that lost its race ----------------------------------------------------------
+// The server answers 200 with the outcome the task actually reached, not with `cancelled`.
+// Needs the mock on `--scenario lostrace`; `--lostrace` runs only this block. The table's
+// announcement is sr-only, so it is read out of the live region rather than photographed.
+if (args.includes("--lostrace")) {
+  const confirmCancel = async (p) => {
+    await p.getByRole("button", { name: "Cancel Draft release notes for 0.4.0" }).click();
+    await p.waitForTimeout(300);
+    await p.getByRole("button", { name: "Cancel task" }).click();
+    await p.waitForTimeout(600);
+  };
+
+  await capture("t19-cancel-lost-race-dark", {
+    before: confirmCancel,
+    after: async (p) => {
+      const live = await p.locator("p[role=status]").first().textContent();
+      console.log(`  live region: ${live}`);
+    },
+  });
+
+  // A different task each time: the mock's state is shared, and t19 already settled t-91a2.
+  const cancelFromDetail = async (p) => {
+    await p.getByRole("button", { name: "Cancel", exact: true }).click();
+    await p.waitForTimeout(300);
+    await p.getByRole("button", { name: "Cancel task" }).click();
+    await p.waitForTimeout(600);
+  };
+  const readNote = async (p) => {
+    console.log(`  note: ${(await p.locator("header span[role=status]").allTextContents()).join(" | ") || "(none)"}`);
+  };
+
+  // The mock has exactly two running tasks and t19 spent one, so the detail pane gets the
+  // other — one theme per run. `--lostrace-theme dark` for the second pass.
+  const detailTheme = args.includes("--lostrace-theme") ? args[args.indexOf("--lostrace-theme") + 1] : "light";
+  await capture(`t20-cancel-lost-race-detail-${detailTheme}`, {
+    theme: detailTheme,
+    url: "/tasks/t-55a0",
+    before: cancelFromDetail,
+    after: readNote,
+  });
+}
+
 // --- The states a screenshot of the happy path never catches ------------------------------
 // These need the mock restarted with a different scenario; `--states` runs only this block.
-if (process.argv.includes("--states")) {
+if (args.includes("--states")) {
   await capture("t17-tasks-empty-dark", {});
   await capture("t18-tasks-empty-light", { theme: "light" });
 }
 
-console.log(`\n${allErrors.length ? `${allErrors.length} console errors:\n${allErrors.join("\n")}` : "no console errors"}`);
+console.log(
+  `\n${allErrors.length ? `${allErrors.length} console errors:\n${allErrors.join("\n")}` : "no console errors"}`,
+);
 await browser.close();
 process.exit(allErrors.length ? 1 : 0);

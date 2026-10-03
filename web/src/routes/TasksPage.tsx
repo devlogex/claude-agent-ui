@@ -19,7 +19,15 @@ import {
   updateTask,
   type TaskView,
 } from "../lib/api.ts";
-import { PRIORITY_LEVELS, pathTail, taskBadge, taskGroup, taskReason, taskTiming } from "../lib/taskStatus.ts";
+import {
+  PRIORITY_LEVELS,
+  cancelOutcome,
+  pathTail,
+  taskBadge,
+  taskGroup,
+  taskReason,
+  taskTiming,
+} from "../lib/taskStatus.ts";
 import { cn, plural, relativeTime } from "../lib/utils.ts";
 
 /**
@@ -114,9 +122,7 @@ export function TasksPage() {
           )}
         >
           <AlertTriangle aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-          <span>
-            Task states may be out of date — the Claude CLI did not respond. {tasks.data.warning}
-          </span>
+          <span>Task states may be out of date — the Claude CLI did not respond. {tasks.data.warning}</span>
         </p>
       )}
 
@@ -355,9 +361,15 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
 
   const cancel = useMutation({
     mutationFn: () => cancelTask(task.id),
-    onSuccess: () => {
+    // Worded from the row the server hands back, never from the verb the user pressed — a task
+    // that settled while `claude stop` was in flight comes back with the outcome it actually
+    // reached (tasks-api-contract rev 4). That case is also highlighted, the way retry is: the
+    // row lands in History under a badge that contradicts the button, and a row you cannot find
+    // reads as a no-op. No row-local message here — the row unmounts as it changes group.
+    onSuccess: (settled) => {
       setMessage(null);
-      onAction(`Cancelled "${task.title}".`);
+      onAction(cancelOutcome(settled, task.title));
+      if (settled.state !== "cancelled") onHighlight(settled.id);
       invalidate();
     },
     onError: handleError,
@@ -450,7 +462,11 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
             SECONDARY,
           )}
         >
-          <time dateTime={new Date(timestamp).toISOString()} title={new Date(timestamp).toLocaleString()} className="text-xs text-fg-muted">
+          <time
+            dateTime={new Date(timestamp).toISOString()}
+            title={new Date(timestamp).toLocaleString()}
+            className="text-xs text-fg-muted"
+          >
             {relativeTime(timestamp)}
           </time>
         </td>
@@ -521,10 +537,7 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
             {message && (
               <p
                 role="status"
-                className={cn(
-                  "mb-3 text-xs",
-                  message.tone === "danger" ? "text-danger-fg" : "text-fg-muted",
-                )}
+                className={cn("mb-3 text-xs", message.tone === "danger" ? "text-danger-fg" : "text-fg-muted")}
               >
                 {message.text}
               </p>
@@ -546,10 +559,7 @@ function TaskExpansion({ task }: { task: TaskView }) {
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <span className="text-sm font-medium text-fg">{task.title}</span>
-        <Link
-          to={`/tasks/${task.id}`}
-          className="text-xs text-accent-fg underline-offset-2 hover:underline"
-        >
+        <Link to={`/tasks/${task.id}`} className="text-xs text-accent-fg underline-offset-2 hover:underline">
           Open detail
         </Link>
       </div>

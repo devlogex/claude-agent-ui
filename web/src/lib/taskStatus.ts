@@ -59,6 +59,25 @@ export function taskBadge(task: TaskView): TaskBadge {
 }
 
 /**
+ * What to say once a cancel has come back.
+ *
+ * `POST /api/tasks/:id/cancel` answers with the task's *actual* state, not with `cancelled`: a
+ * running task can settle while `claude stop` is in flight, and the first terminal write wins
+ * (tasks-api-contract rev 4), so a `200` can carry `succeeded`, `failed` or `blocked`. Every
+ * rendered row already re-reads from the server, which leaves this sentence as the only thing
+ * on screen that could still be claiming an outcome the task never reached.
+ *
+ * Two forms, because there are two width budgets. The table's live region is page-level and the
+ * row has moved by the time it reads, so it needs the title; the detail pane is already headed
+ * by the title and only has room for the fact.
+ */
+export function cancelOutcome(settled: TaskView, title?: string): string {
+  if (settled.state === "cancelled") return title === undefined ? "Cancelled." : `Cancelled "${title}".`;
+  const what = `finished before it could be stopped — ${taskBadge(settled).label}.`;
+  return title === undefined ? `It ${what}` : `"${title}" ${what}`;
+}
+
+/**
  * The badge's second channel: the short fact that state implies, sitting under the badge.
  *
  * Status is never only a hue and never only a word either — a queued row that cannot say how

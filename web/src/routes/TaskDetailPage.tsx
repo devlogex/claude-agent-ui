@@ -17,7 +17,7 @@ import {
   type TaskView,
   type TranscriptMessage,
 } from "../lib/api.ts";
-import { duration, priorityLabel, taskBadge } from "../lib/taskStatus.ts";
+import { cancelOutcome, duration, priorityLabel, taskBadge } from "../lib/taskStatus.ts";
 import { cn } from "../lib/utils.ts";
 
 /**
@@ -105,17 +105,20 @@ function BackButton() {
 
 function TaskActions({ task, onRetried }: { task: TaskView; onRetried: (id: string) => void }) {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
 
   const cancel = useMutation({
     mutationFn: () => cancelTask(task.id),
-    onSuccess: () => {
-      setError(null);
+    // A cancel that lost its race comes back with the outcome the task actually reached. The
+    // header badge corrects itself from the refetch, but silence next to a badge that now reads
+    // "Succeeded" looks like the button did nothing, so the reason gets said out loud.
+    onSuccess: (settled) => {
+      setNote(settled.state === "cancelled" ? null : cancelOutcome(settled));
       invalidate();
     },
     onError: (e) => {
-      setError(errorMessage(e));
+      setNote(errorMessage(e));
       invalidate();
     },
   });
@@ -123,14 +126,14 @@ function TaskActions({ task, onRetried }: { task: TaskView; onRetried: (id: stri
   const retry = useMutation({
     mutationFn: () => retryTask(task.id),
     onSuccess: (created) => {
-      setError(null);
+      setNote(null);
       invalidate();
       // Retry clones, so the new task is a different row with a different id. Following it is
       // the only reading of "retry" that is not a no-op from here.
       onRetried(created.id);
     },
     onError: (e) => {
-      setError(errorMessage(e));
+      setNote(errorMessage(e));
       invalidate();
     },
   });
@@ -140,9 +143,9 @@ function TaskActions({ task, onRetried }: { task: TaskView; onRetried: (id: stri
 
   return (
     <>
-      {error && (
-        <span role="status" className="max-w-xs truncate text-xs text-fg-muted" title={error}>
-          {error}
+      {note && (
+        <span role="status" className="max-w-md truncate text-xs text-fg-muted" title={note}>
+          {note}
         </span>
       )}
       {terminal ? (
