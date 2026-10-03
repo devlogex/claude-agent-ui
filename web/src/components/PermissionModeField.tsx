@@ -15,6 +15,11 @@ import { RadioCard } from "./ui/field.tsx";
  *   2. {@link PERMISSION_HELP} is shown verbatim under the field.
  *   3. Choosing bypass does not commit on the click. It opens a confirmation that names the
  *      directory, and Cancel leaves the choice on `ask`.
+ *   4. That confirmation is shown *every time*. It is deliberately not remembered and not
+ *      suppressed after a first acceptance (locked on T-6). The sentence describing what
+ *      `--dangerously-skip-permissions` does in a real directory is the whole point of the
+ *      step; a grant that stops explaining itself stops being read, and what survives is the
+ *      pre-checked box this field exists to avoid. Do not add a "don't ask again" affordance.
  *
  * ux-guidelines No. 54 (visible label), No. 55 (help read with the field), No. 35 (confirm
  * before an irreversible grant), No. 31 (the state of the choice is never implied by colour).
