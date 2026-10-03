@@ -2,21 +2,196 @@
 
 A local web UI to browse, edit, schedule and run your Claude Code agents as background sessions.
 
+![Queueing a task, the permission choice, schedules and the agent editor](docs/demo.gif)
+
+## Quickstart
+
+You need Node 20+ and the Claude Code CLI on your `PATH` as `claude`.
+
 ```sh
 npx claude-agent-ui
 ```
 
-It opens <http://127.0.0.1:3000> in your browser; pass `--no-open` if you would rather it did not.
+That is the whole setup. It prints a URL, opens <http://127.0.0.1:3000> in your browser, and
+creates `~/.claude-agent-ui/` the first time it runs. There is no config file to write, no account,
+and nothing to sign in to.
 
-## Requirements
+What you get:
 
-- Node 20 or newer
-- The Claude Code CLI on your `PATH` as `claude` (or point at it with `--claude-bin`)
+- **Agents** — every agent definition on disk, project and user scope and plugins, edited in place.
+- **Skills** — the same, for skills, and which agents can reach them.
+- **Tasks** — a real work queue. Two run at once by default; the rest wait their turn.
+- **Schedule** — cron entries that add a task to that queue.
+
+Press Ctrl-C to stop it. Nothing is left running.
+
+## Security
+
+This runs agents on your machine with your files. Three things are worth knowing before you do.
+
+### Permission mode: `ask` by default
+
+Every task carries a `permissionMode`, and it starts at **`ask`**.
+
+| Mode                | What it does                                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ask` (default)     | The CLI prompts for each tool it wants to use. The task parks on the prompt and keeps its queue slot until you answer. |
+| `bypassPermissions` | Passes `--dangerously-skip-permissions` to the CLI.                                                                    |
+
+`--dangerously-skip-permissions` means exactly what it says: the agent runs every tool it decides
+to run — writing files, deleting them, `git push`, `curl`, installing packages — without asking you
+first, anywhere it can reach from its working directory. Nobody is watching a background session,
+so there is no moment where you get to say no.
+
+It is a **per-task opt-in**. Choosing it names the directory the task will run in and asks you to
+confirm — every time, with no "don't ask again".
+
+`--permission-mode bypassPermissions` on the command line moves the default for an _immediate_ run
+only. **Queued and scheduled tasks never inherit it**: they start from `ask` whatever the flag says,
+because a queued task is by definition one nobody is sitting in front of. There is no setting
+anywhere that turns bypass on for everything at once.
+
+A task in `ask` mode that nobody answers will sit there. That is the trade, and it is the reason the
+Schedule screen tells you when a firing was skipped because the previous run is still waiting.
+
+### Loopback only
+
+The server binds `127.0.0.1` and **there is no flag to change it** — `--host` is rejected with an
+error rather than quietly ignored. Every route is additionally behind a guard that checks `Host`
+and `Origin`, so a web page you happen to have open cannot drive it by resolving its own hostname
+to `127.0.0.1`.
+
+If you need it from another machine, forward a port over SSH:
+
+```sh
+ssh -L 3000:127.0.0.1:3000 you@that-machine
+```
+
+That keeps the authentication and the encryption in SSH, where they belong, instead of in an app
+that has none of either.
+
+### No telemetry
+
+Nothing is collected and nothing is sent anywhere. No analytics, no crash reporting, no update
+check, no "anonymous usage statistics". The only processes it starts are your `claude` binary and,
+once at startup unless you pass `--no-open`, your browser. The only network listener is the loopback
+one above.
+
+Your state is yours too: `~/.claude-agent-ui/` is plain JSON, written atomically, and you can read,
+back up or delete it with ordinary tools.
+
+## Running it in the background
+
+**Schedules only fire while the server is running.** Cron runs in-process — there is no daemon
+watching for you. Close the terminal and a 3am schedule does not fire, and it is not replayed when
+you start up again.
+
+If you want schedules to fire whether or not the UI is open, run the server as a user service.
+
+Install it properly first, so there is a stable path to point at:
+
+```sh
+npm install -g claude-agent-ui
+command -v claude-agent-ui    # the path the service will run
+```
+
+Two details decide whether this works:
+
+- **`PATH`.** launchd and systemd both hand a service a minimal `PATH` that does not include
+  nvm, Homebrew or `~/.local/bin`. If `claude` is not on it, the server refuses to start and says
+  so. Set it explicitly to whatever `echo $PATH` shows in your own shell.
+- **One server at a time.** The service holds a lock on the data directory. With it running,
+  `npx claude-agent-ui` will exit and tell you which PID has it — that is correct, not a fault.
+  Just open <http://127.0.0.1:3000>.
+
+### macOS — launchd
+
+`~/Library/LaunchAgents/com.claude-agent-ui.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude-agent-ui</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/claude-agent-ui</string>
+    <string>--no-open</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/claude-agent-ui.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/claude-agent-ui.log</string>
+</dict>
+</plist>
+```
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-agent-ui.plist
+launchctl print gui/$(id -u)/com.claude-agent-ui   # state, and the last exit code
+tail -f /tmp/claude-agent-ui.log                   # the URL, and any preflight complaint
+
+launchctl bootout gui/$(id -u)/com.claude-agent-ui # stop and unload
+```
+
+A LaunchAgent runs when you are logged in. It is deliberately not a LaunchDaemon: a daemon runs as
+root before login, and nothing here should hold root or read another user's `~/.claude`.
+
+### Linux — systemd
+
+`~/.config/systemd/user/claude-agent-ui.service`:
+
+```ini
+[Unit]
+Description=Claude Agent UI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-agent-ui --no-open
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now claude-agent-ui
+systemctl --user status claude-agent-ui
+journalctl --user -u claude-agent-ui -f
+
+# Keep it running when you are not logged in — without this, your user units stop at logout.
+sudo loginctl enable-linger "$USER"
+```
+
+A **user** unit, not a system one, for the same reason: it needs your `~/.claude` and should have
+nothing more than your own privileges.
+
+### Schedules that have to finish on their own
+
+A scheduled task in `ask` mode will park on the first permission prompt and wait for you. If the
+point is that you are asleep, the task has to be `bypassPermissions` — and that is the dangerous
+mode described above. Decide that per schedule, against the directory it runs in. There is no
+setting that makes it both unattended and safe.
 
 ## Options
 
 ```
---port <n>              Port to listen on (default 3000)
+--port <n>              Port to listen on, 0 picks a free one (default 3000)
 --data-dir <path>       State directory (default ~/.claude-agent-ui)
 --config <path>         Config file (default <data-dir>/config.json)
 --cwd <path>            Default working directory for new runs
@@ -35,21 +210,16 @@ Every option can also be set in `~/.claude-agent-ui/config.json` or through a
 `CLAUDE_AGENT_UI_*` environment variable. Flags beat environment variables, which beat the
 config file.
 
-## Defaults worth knowing
+## Other defaults worth knowing
 
-- **Runs ask for permission.** `--dangerously-skip-permissions` is passed only when you choose
-  `bypassPermissions` for that run. It is never the default.
-- **Loopback only.** The server binds `127.0.0.1` and there is no option to change that. Every
-  route is behind a guard that checks `Host` and `Origin`, so a web page cannot reach it by
-  resolving a hostname to `127.0.0.1`.
-- **No telemetry.** Nothing is sent anywhere. The only processes it starts are your `claude`
-  binary and, once at startup unless you pass `--no-open`, your browser.
-- **State is yours.** Everything lives in `~/.claude-agent-ui/` as plain JSON, written
-  atomically. One server at a time holds that directory: a second one exits and tells you which
-  PID has it, so two copies can never interleave their writes.
+- **Retries are off.** A failed task stays failed (`--max-attempts 1`). Re-running an agent that
+  half-finished something is rarely free, so it is your call, from the Retry button.
+- **History is capped at 500.** The oldest entries are dropped. `--history-limit` moves the cap.
 - **Nothing polls.** The UI gets one `GET /api/events` server-sent-event stream and re-reads what
   changed. It reconnects with `Last-Event-ID`, and a client that stops reading is dropped rather
   than buffered.
+- **Untested CLI versions warn, once, at startup.** This release is built against Claude Code 2.x.
+  A different major still starts — it just says so first, on stderr.
 
 ## Development
 
@@ -75,6 +245,11 @@ falls back to an installed Google Chrome.
 
 The build order is not interchangeable. `tsup` cleans `dist/` first; running `vite` before it
 would delete the client that was just built.
+
+`web/scripts/` holds the dev tools that drive a real browser: `check:a11y` for the accessibility
+audit, `check:contrast` for the token pairs, and `shoot-demo.mjs` for the GIF above. They run
+against `web/scripts/mock-api.mjs`, which speaks the same wire format as the real server with
+entirely synthetic content. None of them ship.
 
 ## Licence
 
