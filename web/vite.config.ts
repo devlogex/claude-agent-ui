@@ -41,8 +41,12 @@ export default defineConfig({
   build: {
     // The server serves this directory: see AppOptions.webRoot in ../src/server.ts.
     outDir: path.join(here, "..", "dist", "web"),
+    // Required, not cosmetic: `npm run build:server` runs tsup with clean:true first, which
+    // leaves a half-emptied dist/web behind. This is what finishes the job.
     emptyOutDir: true,
-    sourcemap: true,
+    // Off because dist/ is the published tarball, and a sourcemap carries the whole TSX source
+    // into it — 2.4MB of it. `vite dev` is unaffected; it never reads this.
+    sourcemap: false,
   },
   test: {
     environment: "jsdom",

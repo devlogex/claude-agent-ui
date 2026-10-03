@@ -5,6 +5,7 @@ import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import open from "open";
 import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
 import type { TaskQueue } from "./domain/queue.ts";
@@ -76,15 +77,14 @@ export async function checkClaudeBinary(bin: string): Promise<string | null> {
   );
 }
 
+/**
+ * Best effort only: failing to open a browser must never take the server down, and the URL is
+ * printed either way. `open` rather than our own `xdg-open`/`start` because the cases it gets
+ * right — WSL, a container with no display, Windows quoting — are exactly the ones a hand-rolled
+ * launcher gets wrong, and it spawns with an argv array like everything else here.
+ */
 function openBrowser(url: string): void {
-  const [cmd, args] =
-    process.platform === "darwin"
-      ? ["open", [url]]
-      : process.platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
-        : ["xdg-open", [url]];
-  // Best effort only: failing to open a browser must never take the server down.
-  execFile(cmd, args, () => {});
+  void open(url).catch(() => {});
 }
 
 /** Turns a listen() failure into a sentence the user can act on. */
