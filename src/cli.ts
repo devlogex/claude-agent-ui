@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
 import type { TaskQueue } from "./domain/queue.ts";
+import type { Scheduler } from "./domain/schedules.ts";
 import { HOST, createApp } from "./server.ts";
 import { sweepTempFiles } from "./store/jsonStore.ts";
 import { type Lock, LockError, acquireLock } from "./store/lockfile.ts";
@@ -157,7 +158,9 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   // Covers every way the server goes down: close() from a test, a signal, or an unhandled throw
   // that unwinds to exit. release() is idempotent, so overlapping paths are harmless.
   const tasks = app.locals.tasks as TaskQueue;
+  const schedules = app.locals.schedules as Scheduler;
   server.once("close", () => {
+    schedules.stop();
     tasks.stop();
     lock.release();
   });
@@ -166,6 +169,9 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   // Only once the port is ours: reconciles tasks stranded `running` by an earlier crash, then
   // starts the worker loop. Background sessions outlive us, so a restart adopts them.
   await tasks.start();
+  // After the queue, because a schedule firing before there is anything to drain it would leave
+  // a task sitting queued. Nothing missed while we were down is replayed — see schedules.ts.
+  await schedules.start();
 
   const address = server.address();
   boundPort = typeof address === "object" && address ? address.port : config.port;

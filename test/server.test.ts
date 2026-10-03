@@ -52,6 +52,10 @@ test("loopback host is allowed; foreign Host (DNS rebinding) is refused", async 
     assert.equal((await request(port, { host: `localhost:${port}` })).status, 200);
     assert.equal((await request(port, { host: `evil.example:${port}` })).status, 403);
     assert.equal((await request(port, { host: `127.0.0.1.evil.example:${port}` })).status, 403);
+    // The guard is app-wide middleware, so every route group is covered by construction. Pinned
+    // on the newest one anyway: a route registered above app.use() would quietly escape it.
+    assert.equal((await request(port, { path: "/api/schedules" })).status, 200);
+    assert.equal((await request(port, { path: "/api/schedules", host: `evil.example:${port}` })).status, 403);
   });
 });
 

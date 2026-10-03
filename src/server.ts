@@ -9,6 +9,7 @@ import { ValidationError } from "./domain/errors.ts";
 import { checkDefinition, parseFrontmatter } from "./domain/frontmatter.ts";
 import { TaskError, TaskQueue } from "./domain/queue.ts";
 import { RunError, RunStore } from "./domain/runs.ts";
+import { ScheduleError, Scheduler } from "./domain/schedules.ts";
 import { NEW_SKILL_TEMPLATE, createSkill, deleteSkill, updateSkill } from "./domain/skillStore.ts";
 import { discoverSkills, findSkill, readSkill, resolveAgentSkills, toPublicSkill } from "./domain/skills.ts";
 import { AGENT_EVENTS, EventBus, SKILL_EVENTS } from "./events.ts";
@@ -92,6 +93,15 @@ export function createApp(opts: AppOptions) {
     defaultCwd: opts.defaultCwd,
     bus,
   });
+  // Given the queue, not the CLI: a schedule enqueues and stops there. Nothing in this object
+  // can start a background session even if it wanted to.
+  const schedules = new Scheduler(home, tasks, {
+    dataDir: opts.dataDir,
+    maxAttempts: opts.maxAttempts,
+    starterPrompt: opts.starterPrompt,
+    defaultCwd: opts.defaultCwd,
+    bus,
+  });
   const webRoot = opts.webRoot ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
 
   const app = express();
@@ -100,6 +110,8 @@ export function createApp(opts: AppOptions) {
   // The caller owns the loop's lifetime: nothing starts work until start() is called, and
   // shutdown has to stop it. Tests drive tick() directly and never start the interval.
   app.locals.tasks = tasks;
+  // Same contract for the cron clock: nothing is armed until start(), and shutdown disarms it.
+  app.locals.schedules = schedules;
   // Shutdown needs these: server.close() waits for open connections, and an SSE connection never
   // ends on its own, so something has to end them. See closeStreams below.
   const streams = new Set<() => void>();
@@ -344,6 +356,44 @@ export function createApp(opts: AppOptions) {
     }),
   );
 
+  app.get(
+    "/api/schedules",
+    wrap(async (_req, res) => {
+      res.json({ schedules: await schedules.list() });
+    }),
+  );
+
+  app.post(
+    "/api/schedules",
+    wrap(async (req, res) => {
+      res.status(201).json({ schedule: await schedules.create(req.body ?? {}) });
+    }),
+  );
+
+  app.put(
+    "/api/schedules/:id",
+    wrap(async (req, res) => {
+      res.json({ schedule: await schedules.update(String(req.params.id), req.body ?? {}) });
+    }),
+  );
+
+  app.delete(
+    "/api/schedules/:id",
+    wrap(async (req, res) => {
+      await schedules.remove(String(req.params.id));
+      res.json({ ok: true });
+    }),
+  );
+
+  // 200 for a suppressed fire as well as a fired one: being told "not now, the previous run is
+  // still waiting" is the route working, and the UI has to show the reason either way.
+  app.post(
+    "/api/schedules/:id/run-now",
+    wrap(async (req, res) => {
+      res.json(await schedules.runNow(String(req.params.id)));
+    }),
+  );
+
   app.post(
     "/api/runs/stop-finished",
     wrap(async (_req, res) => {
@@ -369,7 +419,10 @@ export function createApp(opts: AppOptions) {
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     const raw =
-      err instanceof ValidationError || err instanceof RunError || err instanceof TaskError
+      err instanceof ValidationError ||
+      err instanceof RunError ||
+      err instanceof TaskError ||
+      err instanceof ScheduleError
         ? err.status
         : ((err as any).status ?? (err as any).statusCode);
     const status = Number.isInteger(raw) && raw >= 400 && raw < 600 ? raw : 500;

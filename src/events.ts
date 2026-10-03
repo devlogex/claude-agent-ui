@@ -32,6 +32,27 @@ export const TASK_EVENTS = {
 } as const;
 
 /**
+ * The scheduler's notifications, payload `{ scheduleId }` plus what the client cannot re-read.
+ *
+ * `fired` and `skipped` carry the outcome inline — `{ taskId, trigger }` and `{ reason }` — because
+ * a client watching the schedules screen wants to say "09:00 was suppressed, the previous run is
+ * waiting on a permission prompt" without first correlating two resources. Both are also recorded
+ * on the schedule itself, so a client that missed the event still sees why on its next read.
+ *
+ * `failed` is the fire that could not become a task at all (the agent was renamed, the working
+ * directory is gone). A fire that silently does nothing is the one failure mode a scheduler must
+ * never have, so it gets its own event rather than being folded into `skipped`.
+ */
+export const SCHEDULE_EVENTS = {
+  created: "schedule:created",
+  updated: "schedule:updated",
+  removed: "schedule:removed",
+  fired: "schedule:fired",
+  skipped: "schedule:skipped",
+  failed: "schedule:failed",
+} as const;
+
+/**
  * Definition files changed on disk through this server, payload `{ id }`.
  *
  * These are not a filesystem watcher: an agent file edited in another editor produces no event,

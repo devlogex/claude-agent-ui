@@ -115,7 +115,12 @@ function deriveTitle(prompt: string): string {
   return title.length > MAX_TITLE_LENGTH ? `${title.slice(0, MAX_TITLE_LENGTH - 1)}…` : title;
 }
 
-function checkTitle(value: unknown): string {
+/**
+ * The three task fields the scheduler validates too. Exported rather than copied: a schedule is a
+ * saved task template, so "what is a valid title/priority/maxAttempts" has to have one definition
+ * or the saved template accepts something the enqueued task will later reject.
+ */
+export function checkTitle(value: unknown): string {
   if (typeof value !== "string") throw new InputError("title must be a string");
   const title = value.trim();
   if (!title) throw new InputError("title must not be empty");
@@ -125,14 +130,14 @@ function checkTitle(value: unknown): string {
   return title;
 }
 
-function checkPriority(value: unknown): number {
+export function checkPriority(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || Math.abs(value) > PRIORITY_LIMIT) {
     throw new InputError(`priority must be a whole number between -${PRIORITY_LIMIT} and ${PRIORITY_LIMIT}`);
   }
   return value;
 }
 
-function checkMaxAttempts(value: unknown, fallback: number): number {
+export function checkMaxAttempts(value: unknown, fallback: number): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_ATTEMPTS_LIMIT) {
     throw new InputError(`maxAttempts must be a whole number between 1 and ${MAX_ATTEMPTS_LIMIT}`);
@@ -275,6 +280,17 @@ export class TaskQueue {
     const file = await findTranscript(this.home, task.sessionId);
     if (!file) return { messages: [], truncated: false };
     return readMessages(file);
+  }
+
+  /**
+   * The newest task a given schedule created, or undefined if it has never fired.
+   *
+   * This is the scheduler's overlap check and nothing else reads it: the schedule asks "is the one
+   * I started last time still going?" before starting another. Newest by `createdAt`, because the
+   * question is about the most recent fire, not about whatever finished most recently.
+   */
+  async latestForSchedule(scheduleId: string): Promise<TaskRecord | undefined> {
+    return (await this.load()).filter((t) => t.scheduleId === scheduleId).sort((a, b) => b.createdAt - a.createdAt)[0];
   }
 
   private async require(id: string): Promise<TaskRecord> {
