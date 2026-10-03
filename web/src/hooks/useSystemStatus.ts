@@ -1,25 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, api, listRuns, queryKeys, type RunStatus } from "../lib/api.ts";
-
-/** Queue counters, from the task queue that M4 introduces. */
-export interface TaskStats {
-  queued: number;
-  running: number;
-}
+import { getTaskStats, listRuns, queryKeys, type RunStatus } from "../lib/api.ts";
 
 /**
  * What the status bar shows, assembled from the resources that own each number.
  *
- * `queued` is `null` until M4 ships `/api/tasks/stats`. The bar renders that as a plain
- * "Queue unavailable" rather than inventing a zero — a console that reports a confident 0 for
- * a queue it cannot see is worse than one that admits it.
+ * Two sources, deliberately not merged into one: `/api/runs` knows about *every* background
+ * session, including one a user started from their own terminal, and `/api/tasks/stats` knows
+ * about the queue. "Running" is the first — an operator asking "is anything running?" means all
+ * of it — and "Queued" is the second, because only the queue has a queue.
  */
 export interface SystemStatus {
   /** `null` until the run list has been read, and again if reading it fails. */
   running: number | null;
   /** Runs parked on a prompt a human has to answer. The one counter that demands action. */
   needsInput: number | null;
+  /** Tasks waiting to start. `null` only while the first read is in flight or it failed. */
   queued: number | null;
+  /** How many tasks the queue runs at once, so the bar can say what the backlog is waiting for. */
+  maxConcurrent: number | null;
   isLoading: boolean;
   error: unknown;
 }
@@ -30,20 +28,7 @@ export interface SystemStatus {
  */
 export function useSystemStatus(): SystemStatus {
   const runs = useQuery({ queryKey: queryKeys.runs, queryFn: listRuns });
-
-  const stats = useQuery({
-    queryKey: queryKeys.taskStats,
-    queryFn: async () => {
-      try {
-        return await api.get<TaskStats>("/api/tasks/stats");
-      } catch (error) {
-        // The endpoint lands in M4. Until then a 404 is the expected answer, not a failure
-        // worth putting an error state on the whole status bar for.
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw error;
-      }
-    },
-  });
+  const stats = useQuery({ queryKey: queryKeys.taskStats, queryFn: getTaskStats });
 
   const count = (status: RunStatus) => (runs.data ? runs.data.runs.filter((r) => r.status === status).length : null);
 
@@ -53,6 +38,7 @@ export function useSystemStatus(): SystemStatus {
     running: count("running"),
     needsInput: count("waiting"),
     queued: stats.data?.queued ?? null,
+    maxConcurrent: stats.data?.maxConcurrent ?? null,
     isLoading: runs.isLoading,
     error: runs.error,
   };

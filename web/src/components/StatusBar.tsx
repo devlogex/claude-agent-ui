@@ -14,7 +14,7 @@ import { cn, plural } from "../lib/utils.ts";
  * confident while the stream was down would be quietly lying.
  */
 export function StatusBar() {
-  const { running, needsInput, queued, error } = useSystemStatus();
+  const { running, needsInput, queued, maxConcurrent, error } = useSystemStatus();
   const connection = useConnectionState();
   const spoken =
     running === null
@@ -63,8 +63,11 @@ export function StatusBar() {
           emphasis={(queued ?? 0) > 0}
           title={
             queued === null
-              ? "The task queue arrives in a later milestone; there is nothing to report yet."
-              : plural(queued, "task") + " waiting to start"
+              ? "The task queue has not been read yet."
+              : // Names the concurrency limit, so a backlog that is not moving is explained by
+                // the bar rather than looking stuck.
+                `${plural(queued, "task")} waiting to start` +
+                (maxConcurrent === null ? "" : `; up to ${maxConcurrent} run at once`)
           }
         />
 

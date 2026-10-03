@@ -146,6 +146,10 @@
   --sidebar-width-collapsed: 3.25rem; /* 52px */
   --statusbar-height: 1.75rem; /* 28px */
   --topbar-height: 3rem; /* 48px */
+  /* Wide enough for the longest status label ("Waiting — may need input"), so a row changing
+     state does not reflow the table mid-scan — ux-guidelines No. 19 (Content Jumping). */
+  --status-col-width: 13.5rem; /* 216px */
+  --task-row-height: 2.25rem; /* 36px — the skeleton reserves exactly this */
 
   --z-overlay: 50;
   --z-statusbar: 30;
@@ -200,13 +204,21 @@
      label in the UI — ux-guidelines No. 37, never colour alone. */
   --status-running-fg: var(--green-400);
   --status-running-bg: color-mix(in oklab, var(--green-500) 18%, transparent);
-  --status-queued-fg: var(--amber-400);
-  --status-queued-bg: color-mix(in oklab, var(--amber-500) 18%, transparent);
-  /* Same amber family as queued: both mean "stopped, waiting on something". They are told
-     apart by label and icon, which is how every state in this app is told apart. Separate
-     tokens so they can diverge without touching the components. */
-  --status-waiting-fg: var(--amber-400);
-  --status-waiting-bg: color-mix(in oklab, var(--amber-500) 18%, transparent);
+  /* Amber is the loudest non-error hue in the set, so it means exactly one thing: a human is
+     needed here. `waiting` and `blocked` both alias it; they are told apart by label, icon and
+     which group of the table they sit in, which is how every state in this app is told apart. */
+  --status-attention-fg: var(--amber-400);
+  --status-attention-bg: color-mix(in oklab, var(--amber-500) 18%, transparent);
+  --status-waiting-fg: var(--status-attention-fg);
+  --status-waiting-bg: var(--status-attention-bg);
+  --status-blocked-fg: var(--status-attention-fg);
+  --status-blocked-bg: var(--status-attention-bg);
+  /* Queued joins the blue "pending" family rather than amber. At concurrency 2 a backlog is the
+     normal majority, and thirty amber rows would drown the one task parked on a permission
+     prompt — which inverts the hierarchy this screen exists to show. A queued task needs
+     nothing from anybody, so it must not out-shout one that does. */
+  --status-queued-fg: var(--blue-400);
+  --status-queued-bg: color-mix(in oklab, var(--blue-500) 18%, transparent);
   --status-scheduled-fg: var(--blue-300);
   --status-scheduled-bg: color-mix(in oklab, var(--blue-500) 18%, transparent);
   --status-finished-fg: var(--slate-300);
@@ -260,10 +272,14 @@
      one more step down the ramp than the plain accent/danger text does. */
   --status-running-fg: var(--green-800);
   --status-running-bg: color-mix(in oklab, var(--green-600) 14%, transparent);
-  --status-queued-fg: var(--amber-800);
-  --status-queued-bg: color-mix(in oklab, var(--amber-500) 20%, transparent);
-  --status-waiting-fg: var(--amber-800);
-  --status-waiting-bg: color-mix(in oklab, var(--amber-500) 20%, transparent);
+  --status-attention-fg: var(--amber-800);
+  --status-attention-bg: color-mix(in oklab, var(--amber-500) 20%, transparent);
+  --status-waiting-fg: var(--status-attention-fg);
+  --status-waiting-bg: var(--status-attention-bg);
+  --status-blocked-fg: var(--status-attention-fg);
+  --status-blocked-bg: var(--status-attention-bg);
+  --status-queued-fg: var(--blue-700);
+  --status-queued-bg: color-mix(in oklab, var(--blue-500) 14%, transparent);
   --status-scheduled-fg: var(--blue-700);
   --status-scheduled-bg: color-mix(in oklab, var(--blue-500) 14%, transparent);
   --status-finished-fg: var(--slate-600);
@@ -320,6 +336,21 @@
   --button-radius: var(--radius-md);
   --button-height-sm: var(--space-6);
   --button-height-md: var(--space-8);
+
+  /* Form controls. Native elements, styled — they are keyboard-reachable without a dependency. */
+  --field-bg: var(--color-surface-sunken);
+  --field-fg: var(--color-fg);
+  --field-placeholder: var(--color-fg-subtle);
+  --field-border: var(--color-border);
+  --field-radius: var(--radius-md);
+  --field-pad-x: var(--space-2);
+  --field-pad-y: var(--space-1);
+  --field-label-fg: var(--color-fg);
+  --field-help-fg: var(--color-fg-muted);
+
+  /* Notice bar — a persistent inline strip, not a toast. Staleness does not disappear. */
+  --notice-fg: var(--status-attention-fg);
+  --notice-bg: var(--status-attention-bg);
 
   /* Overlay (dialogs) */
   --overlay-bg: var(--color-surface-raised);

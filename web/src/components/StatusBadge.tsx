@@ -7,6 +7,7 @@ import {
   Clock,
   Loader2,
   MessageCircleQuestion,
+  OctagonAlert,
   XCircle,
 } from "lucide-react";
 import type * as React from "react";
@@ -20,7 +21,17 @@ import { cn } from "../lib/utils.ts";
  * renders the dot alone — that is the point of the component existing.
  */
 export type Status =
-  "running" | "waiting" | "queued" | "scheduled" | "finished" | "failed" | "idle" | "missing" | "unknown";
+  | "running"
+  | "waiting"
+  | "blocked"
+  | "queued"
+  | "scheduled"
+  | "finished"
+  | "failed"
+  | "cancelled"
+  | "idle"
+  | "missing"
+  | "unknown";
 
 interface StatusSpec {
   label: string;
@@ -47,6 +58,14 @@ const SPECS: Record<Status, StatusSpec> = {
     fg: "var(--status-waiting-fg)",
     bg: "var(--status-waiting-bg)",
   },
+  // The agent stopped itself and said why — it is not failed, and it is not finished. It shares
+  // amber with `waiting` because it means the same thing to an operator: this one needs you.
+  blocked: {
+    label: "Blocked",
+    Icon: OctagonAlert,
+    fg: "var(--status-blocked-fg)",
+    bg: "var(--status-blocked-bg)",
+  },
   queued: { label: "Queued", Icon: Clock, fg: "var(--status-queued-fg)", bg: "var(--status-queued-bg)" },
   scheduled: {
     label: "Scheduled",
@@ -61,6 +80,13 @@ const SPECS: Record<Status, StatusSpec> = {
     bg: "var(--status-finished-bg)",
   },
   failed: { label: "Failed", Icon: XCircle, fg: "var(--status-failed-fg)", bg: "var(--status-failed-bg)" },
+  // Neutral, not red: the user asked for this. It is history, not a fault.
+  cancelled: {
+    label: "Cancelled",
+    Icon: CircleSlash,
+    fg: "var(--status-idle-fg)",
+    bg: "var(--status-idle-bg)",
+  },
   idle: { label: "Idle", Icon: CircleDot, fg: "var(--status-idle-fg)", bg: "var(--status-idle-bg)" },
   // The run record survived but its session did not — usually a reboot. Distinct from
   // "Unknown", which means we could not read the session list at all this time.
