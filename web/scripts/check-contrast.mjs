@@ -35,6 +35,8 @@ const THEMES = {
   dark: ruleBody(':root,\n:root[data-theme="dark"]'),
   light: ruleBody(':root[data-theme="light"]'),
 };
+/** Layer 3. Every value in here resolves through layer 2, so it is theme-independent. */
+const components = ruleBody(":root {\n  /* Sidebar */");
 
 function resolve(value, theme) {
   let current = value;
@@ -102,6 +104,18 @@ const PAIRS = [
   ["--color-fg-on-danger", "--color-danger-hover"],
 ];
 
+/**
+ * Component-layer pairs that do not reduce to "text on a surface" and so are not covered above.
+ *
+ * The switch is the case this exists for: its thumb is the only thing that distinguishes on
+ * from off by colour, and it sits on the track rather than on the page. 3:1 — a thumb is a
+ * graphical object, not text (ux-guidelines No. 36 / WCAG 1.4.11).
+ */
+const COMPONENT_PAIRS = [
+  ["--switch-thumb-off", "--switch-track-bg", NON_TEXT],
+  ["--switch-thumb-on", "--switch-track-bg", NON_TEXT],
+];
+
 const STATUSES = ["running", "waiting", "queued", "scheduled", "finished", "failed", "idle"];
 
 /**
@@ -139,6 +153,13 @@ for (const [themeName, theme] of Object.entries(THEMES)) {
 
   for (const [fgKey, bgKey] of PAIRS) {
     assert(themeName, `${fgKey} on ${bgKey}`, resolve(theme[fgKey], theme), resolve(theme[bgKey], theme), TEXT);
+  }
+
+  // Component tokens resolve through the semantic layer, so the same theme map answers them.
+  for (const [fgKey, bgKey, need] of COMPONENT_PAIRS) {
+    const fg = resolve(components[fgKey], theme);
+    const bg = resolve(components[bgKey], theme);
+    assert(themeName, `${fgKey} on ${bgKey}`, fg, bg, need);
   }
 
   for (const [fgKey, quietKey, over] of QUIET) {

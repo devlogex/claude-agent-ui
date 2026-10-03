@@ -1,6 +1,6 @@
 import type { Status } from "../components/StatusBadge.tsx";
 import type { TaskView } from "./api.ts";
-import { relativeTime } from "./utils.ts";
+import { ordinal, relativeTime } from "./utils.ts";
 
 /**
  * Eight conditions, one mapping.
@@ -129,13 +129,6 @@ export function pathTail(cwd: string, segments = 2): string {
   const parts = cwd.split("/").filter(Boolean);
   if (parts.length <= segments) return cwd;
   return `…/${parts.slice(-segments).join("/")}`;
-}
-
-/** `1` → `"1st"`. Recognition over recall: "3rd of 7" reads, "position 3" has to be decoded. */
-export function ordinal(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 13) return `${n}th`;
-  return `${n}${["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
 }
 
 /** How long it ran, in the coarsest unit that is still true. `null` when it never started. */

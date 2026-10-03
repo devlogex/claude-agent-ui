@@ -1,6 +1,6 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "./button.tsx";
 
@@ -9,8 +9,8 @@ import { Button } from "./button.tsx";
  *
  * ConfirmDialog is its sibling for "are you sure" — that one is an AlertDialog, which steals
  * focus to Cancel and refuses to close on an outside click. This one behaves like a form: focus
- * lands on the first field, Escape and the backdrop close it. Both get the same focus trap and
- * the same focus restore on close, because both come from Radix rather than a hand-rolled div.
+ * lands inside the panel, Escape and the backdrop close it. Both get the same focus trap and
+ * the same focus restore on close.
  */
 
 export const Dialog = DialogPrimitive.Root;
@@ -28,10 +28,36 @@ export interface DialogPanelProps {
 }
 
 export function DialogPanel({ title, description, children, footer, className }: DialogPanelProps) {
+  /**
+   * Where focus came from, so it can be given back.
+   *
+   * Radix restores focus to a `<Dialog.Trigger>` and to nothing else: its own close handler
+   * calls `preventDefault()` and then `triggerRef.current?.focus()`. Every dialog in this app
+   * is opened from state — a row's Edit button, a page's New button — so there is no Trigger,
+   * that ref is null, and focus lands on `<body>`: a keyboard user who presses Escape is
+   * dropped at the top of the document and has to tab all the way back.
+   *
+   * `onOpenAutoFocus` fires while the previously focused element is still the active one, which
+   * is the one moment it can be read. Preventing the default on close stops Radix's own
+   * (broken, here) restore from running.
+   */
+  const restoreTo = React.useRef<HTMLElement | null>(null);
+
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="overlay-scrim fixed inset-0 z-50 bg-[var(--overlay-scrim)]" />
       <DialogPrimitive.Content
+        onOpenAutoFocus={() => {
+          const active = document.activeElement;
+          restoreTo.current = active instanceof HTMLElement ? active : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          // Only when the element is still in the document: a dialog that deleted the row it
+          // was opened from must fall back to Radix rather than focus a detached node.
+          if (!restoreTo.current?.isConnected) return;
+          event.preventDefault();
+          restoreTo.current.focus();
+        }}
         className={cn(
           "overlay-panel fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-var(--space-8))] w-[min(34rem,calc(100vw-2rem))]",
           "-translate-x-1/2 -translate-y-1/2 flex-col",

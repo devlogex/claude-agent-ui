@@ -11,6 +11,19 @@ export function plural(count: number, singular: string, pluralForm = `${singular
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+/**
+ * `1` → `"1st"`. Recognition over recall: "3rd of 7" reads, "position 3" has to be decoded.
+ *
+ * Here rather than beside either caller: the queue reads it as a position and the schedule
+ * screen reads it as a day of the month, and one of those having its own copy is how the two
+ * drift on `11th`.
+ */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
+}
+
 const UNITS: [limitSeconds: number, perUnit: number, unit: Intl.RelativeTimeFormatUnit][] = [
   [60, 1, "second"],
   [3_600, 60, "minute"],

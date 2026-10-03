@@ -385,9 +385,40 @@
   --field-label-fg: var(--color-fg);
   --field-help-fg: var(--color-fg-muted);
 
+  /* Switch — one implementation, used labelled in a form and bare in a table row.
+
+     The track stays a neutral well in both states and the *thumb* carries the hue, which is what
+     keeps the contrast honest: an accent-filled track would put a light thumb at 1.8:1 on green
+     in dark mode, and there is no thumb colour that clears 3:1 on both a green and a slate track.
+     Grey-on-sunken and accent-on-sunken both clear it in both themes.
+
+     24px tall because that is the WCAG 2.2 AA minimum pointer target — ux-guidelines No. 104. */
+  --switch-track-bg: var(--color-surface-sunken);
+  --switch-track-border: var(--color-border);
+  --switch-thumb-off: var(--color-fg-subtle);
+  --switch-thumb-on: var(--color-accent);
+  --switch-width: var(--space-10);
+  --switch-height: var(--space-6);
+
   /* Notice bar — a persistent inline strip, not a toast. Staleness does not disappear. */
   --notice-fg: var(--status-attention-fg);
   --notice-bg: var(--status-attention-bg);
+
+  /* Limitation notice — the sibling of the notice bar for a fact that is permanent rather than
+     a condition. Amber is reserved for "a human is needed here"; a limitation that is true on
+     every visit would burn that meaning out by the second day, so this reads as information:
+     the raised surface, a strong rule, and an icon. It is still a persistent strip, never a
+     toast (ux-guidelines No. 82 — toasts are for transient, non-critical messages). */
+  --limitation-fg: var(--color-fg-muted);
+  --limitation-fg-strong: var(--color-fg);
+  --limitation-bg: var(--color-surface-raised);
+  --limitation-border: var(--color-border-strong);
+
+  /* Schedule table. Narrower than the task status column: the widest label here is "Disabled",
+     not "Waiting — may need input". Still fixed, so a row toggling off does not reflow the
+     table mid-scan (ux-guidelines No. 19). */
+  --schedule-state-col-width: var(--space-16);
+  --schedule-row-height: var(--space-12);
 
   /* Overlay (dialogs) */
   --overlay-bg: var(--color-surface-raised);

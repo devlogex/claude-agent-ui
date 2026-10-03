@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { plural, relativeTime } from "./utils.ts";
+import { ordinal, plural, relativeTime } from "./utils.ts";
 
 describe("plural", () => {
   it("agrees with its count", () => {
@@ -31,5 +31,25 @@ describe("relativeTime", () => {
 
   it("handles a clock-skewed future timestamp without producing nonsense", () => {
     expect(relativeTime(now + 5 * 60_000, now)).toMatch(/5 min/);
+  });
+});
+
+describe("ordinal", () => {
+  it("reads the way a person would say it", () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 31, 101, 111].map(ordinal)).toEqual([
+      "1st",
+      "2nd",
+      "3rd",
+      "4th",
+      "11th",
+      "12th",
+      "13th",
+      "21st",
+      "22nd",
+      "23rd",
+      "31st",
+      "101st",
+      "111th",
+    ]);
   });
 });

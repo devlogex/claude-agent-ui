@@ -119,19 +119,84 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
   },
 );
 
-export interface SwitchProps {
+export interface SwitchControlProps {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  label: string;
-  /** What this does, in plain words. Never a recommendation for the riskier setting. */
-  help?: React.ReactNode;
   id?: string;
   disabled?: boolean;
+  /** Required when the control has no visible `<label>` — a bare switch in a table row. */
+  "aria-label"?: string;
+  "aria-describedby"?: string;
+  className?: string;
 }
 
 /**
- * An on/off control. `role="switch"` on a native checkbox: Space toggles it, a screen reader
- * reads "on"/"off" rather than "checked", and there is no custom key handling to get wrong.
+ * The switch itself: a track, a thumb and nothing else.
+ *
+ * One implementation, two users — {@link Switch} puts a label block beside it in a form, and a
+ * table row uses it bare with an `aria-label`. Two switches that looked almost the same would be
+ * the thing worth avoiding here.
+ *
+ * It is a real `<input type="checkbox" role="switch">` under a painted track, not a `<button>`
+ * pretending: Space toggles it, a screen reader says "on"/"off", and the form-control plumbing
+ * (name, disabled, the global focus ring) is the platform's rather than ours. The input is the
+ * full 24x40 box, so the pointer target is the whole switch — ux-guidelines No. 104.
+ */
+export function SwitchControl({ checked, onCheckedChange, id, disabled, className, ...aria }: SwitchControlProps) {
+  return (
+    <span
+      className={cn(
+        "relative inline-flex h-[var(--switch-height)] w-[var(--switch-width)] shrink-0 items-center",
+        className,
+      )}
+    >
+      <input
+        id={id}
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onCheckedChange(e.target.checked)}
+        {...aria}
+        className={cn(
+          "peer absolute inset-0 z-10 m-0 size-full cursor-pointer appearance-none",
+          "rounded-[var(--radius-full)] disabled:cursor-not-allowed",
+        )}
+      />
+      {/*
+        The checked styles live on the track, not on the thumb: `peer-*` compiles to a sibling
+        combinator, and the thumb is the input's nephew rather than its sibling. The child
+        selector reaches it from the one element that *is* a sibling.
+      */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none flex h-full w-full items-center rounded-[var(--radius-full)] px-1",
+          "border border-[var(--switch-track-border)] bg-[var(--switch-track-bg)]",
+          "peer-disabled:opacity-50",
+          "peer-checked:[&>span]:translate-x-[var(--space-4)]",
+          "peer-checked:[&>span]:bg-[var(--switch-thumb-on)]",
+        )}
+      >
+        <span
+          className={cn(
+            "size-3.5 rounded-[var(--radius-full)] bg-[var(--switch-thumb-off)]",
+            "transition-transform duration-[var(--duration-fast)] ease-[var(--ease-out)]",
+          )}
+        />
+      </span>
+    </span>
+  );
+}
+
+export interface SwitchProps extends Omit<SwitchControlProps, "aria-label" | "aria-describedby"> {
+  label: string;
+  /** What this does, in plain words. Never a recommendation for the riskier setting. */
+  help?: React.ReactNode;
+}
+
+/**
+ * A switch with its label and consequence, for a form.
  *
  * `onCheckedChange` fires with the value the user asked for, not the value committed — which is
  * what lets a caller put a confirmation in front of turning one on.
@@ -142,18 +207,13 @@ export function Switch({ checked, onCheckedChange, label, help, id, disabled }: 
   const helpId = help ? `${inputId}-help` : undefined;
   return (
     <div className="flex items-start gap-3">
-      <input
+      <SwitchControl
         id={inputId}
-        type="checkbox"
-        role="switch"
         checked={checked}
+        onCheckedChange={onCheckedChange}
         disabled={disabled}
         aria-describedby={helpId}
-        onChange={(e) => onCheckedChange(e.target.checked)}
-        className={cn(
-          "mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]",
-          "disabled:cursor-not-allowed disabled:opacity-50",
-        )}
+        className="mt-px"
       />
       <div className="min-w-0 flex-1">
         <label htmlFor={inputId} className="cursor-pointer text-sm font-medium text-[var(--field-label-fg)]">
