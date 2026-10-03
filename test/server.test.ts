@@ -55,24 +55,31 @@ test("loopback host is allowed; foreign Host (DNS rebinding) is refused", async 
   });
 });
 
+/** Drives the guard middleware directly; `status` stays 0 when it called next() instead. */
+function callGuard(
+  guard: ReturnType<typeof loopbackGuard>,
+  headers: Record<string, string>,
+  method = "GET",
+): { status: number; nexted: boolean } {
+  let status = 0;
+  let nexted = false;
+  const res = {
+    status(code: number) {
+      status = code;
+      return res;
+    },
+    json() {},
+  };
+  guard({ headers, method } as never, res as never, () => {
+    nexted = true;
+  });
+  return { status, nexted };
+}
+
 // Node's http client always sends a Host header, so the missing-header case is checked directly.
 test("loopbackGuard refuses a missing Host and a loopback host on the wrong port", () => {
   const guard = loopbackGuard(3000);
-  const call = (headers: Record<string, string>, method = "GET") => {
-    let status = 0;
-    let nexted = false;
-    const res = {
-      status(code: number) {
-        status = code;
-        return res;
-      },
-      json() {},
-    };
-    guard({ headers, method } as never, res as never, () => {
-      nexted = true;
-    });
-    return { status, nexted };
-  };
+  const call = (headers: Record<string, string>, method = "GET") => callGuard(guard, headers, method);
   assert.deepEqual(call({}), { status: 403, nexted: false });
   assert.deepEqual(call({ host: "127.0.0.1:3001" }), { status: 403, nexted: false });
   assert.deepEqual(call({ host: "127.0.0.1:3000" }), { status: 0, nexted: true });
@@ -83,6 +90,16 @@ test("loopbackGuard refuses a missing Host and a loopback host on the wrong port
     status: 403,
     nexted: false,
   });
+});
+
+// Regression: --port 0 lets the OS choose, so a guard frozen on 0 would 403 the real URL.
+test("loopbackGuard follows a port that is only known after listen()", () => {
+  let bound = 0;
+  const guard = loopbackGuard(() => bound);
+  assert.deepEqual(callGuard(guard, { host: "127.0.0.1:54321" }), { status: 403, nexted: false });
+  bound = 54321;
+  assert.deepEqual(callGuard(guard, { host: "127.0.0.1:54321" }), { status: 0, nexted: true });
+  assert.deepEqual(callGuard(guard, { host: "127.0.0.1:0" }), { status: 403, nexted: false });
 });
 
 test("state-changing requests need a matching or absent Origin", async () => {
@@ -109,7 +126,7 @@ test("the guard covers every route, including unknown ones", async () => {
   });
 });
 
-test("/api/config reports the ask default and never leaks a file path", async () => {
+test("/api/config reports the ask default", async () => {
   await withServer(async (port) => {
     const { status, body } = await request(port, { path: "/api/config" });
     assert.equal(status, 200);

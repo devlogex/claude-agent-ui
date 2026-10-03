@@ -162,6 +162,22 @@ test("list: running has no final text; finished reads it from the transcript", a
   assert.equal(view.status, "missing");
 });
 
+test("the final-message cache does not outlive the runs it was built for", async () => {
+  const { home, cli, store } = await setup();
+  await store.start("a", home);
+  await put(
+    path.join(home, ".claude", "projects", "-x", "abcd1234-full.jsonl"),
+    JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "text", text: "All done." }] } }),
+  );
+  cli.sessions[0].status = "idle";
+  assert.equal((await store.list()).runs[0].finalText, "All done.");
+  assert.equal(store.cachedFinalMessages, 1);
+
+  await store.remove("abcd1234");
+  await store.list();
+  assert.equal(store.cachedFinalMessages, 0);
+});
+
 test("remove forgets the run even when the session is already gone", async () => {
   const { home, cli, store } = await setup();
   await store.start("a", home);

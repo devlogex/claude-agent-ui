@@ -195,7 +195,21 @@ export class RunStore {
         };
       }),
     );
+    this.pruneFinalCache(views);
     return { runs: views, warning };
+  }
+
+  /** Drops cached final messages for sessions no longer in the run list, so the map stays bounded. */
+  private pruneFinalCache(views: RunView[]): void {
+    const live = new Set(views.map((v) => v.sessionId).filter((id): id is string => id !== null));
+    for (const sessionId of this.finalCache.keys()) {
+      if (!live.has(sessionId)) this.finalCache.delete(sessionId);
+    }
+  }
+
+  /** Test seam: how many sessions the final-message cache is currently holding. */
+  get cachedFinalMessages(): number {
+    return this.finalCache.size;
   }
 
   private async requireRun(runId: string): Promise<RunRecord> {

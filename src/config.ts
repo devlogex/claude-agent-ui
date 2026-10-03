@@ -78,7 +78,7 @@ export const USAGE = `claude-agent-ui — local web UI for Claude Code agents
 Usage: claude-agent-ui [options]
 
 Options:
-  --port <n>              Port to listen on (default ${DEFAULTS.port})
+  --port <n>              Port to listen on, 0 picks a free one (default ${DEFAULTS.port})
   --data-dir <path>       State directory (default ~/.claude-agent-ui)
   --config <path>         Config file (default <data-dir>/config.json)
   --cwd <path>            Default working directory for new runs
@@ -200,6 +200,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): AppConfig {
   }
 
   return {
+    // 0 is deliberate: it asks the OS for a free port, which listen() then reports back.
     port: asInt(pick("port") ?? DEFAULTS.port, "port", 0, 65535),
     dataDir,
     starterPrompt: String(pick("starterPrompt") ?? DEFAULTS.starterPrompt),

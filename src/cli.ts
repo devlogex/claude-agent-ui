@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
+import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
-import { EventBus } from "./events.ts";
 import { HOST, createApp } from "./server.ts";
 
 const MIN_NODE_MAJOR = 20;
@@ -55,15 +55,27 @@ function openBrowser(url: string): void {
   execFile(cmd, args, () => {});
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+/** Turns a listen() failure into a sentence the user can act on. */
+function describeListenError(err: NodeJS.ErrnoException, port: number): string {
+  if (err.code === "EADDRINUSE") {
+    return `Port ${port} is already in use. Start it on another port: claude-agent-ui --port ${port + 1}`;
+  }
+  if (err.code === "EACCES") {
+    return `Port ${port} needs elevated privileges. Pick a port above 1023: claude-agent-ui --port 3000`;
+  }
+  return err.message;
+}
+
+/** Starts the server and resolves once it is listening; returns undefined for --help and --version. */
+export async function main(argv = process.argv.slice(2)): Promise<Server | undefined> {
   const flags = parseArgs(argv);
   if (flags.help) {
     process.stdout.write(USAGE);
-    return;
+    return undefined;
   }
   if (flags.version) {
     process.stdout.write(`${readVersion()}\n`);
-    return;
+    return undefined;
   }
 
   const nodeProblem = checkNodeVersion();
@@ -73,40 +85,45 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const claudeProblem = await checkClaudeBinary(config.claudeBin);
   if (claudeProblem) throw new ConfigError(claudeProblem);
 
+  // With --port 0 the OS assigns the port at listen(), so the guard reads it back rather than
+  // freezing the requested 0 — otherwise it would reject the very URL we are about to print.
+  let boundPort = config.port;
   const app = createApp({
     home: os.homedir(),
     cli: new ClaudeCli(execRunner(config.claudeBin)),
-    port: config.port,
+    port: () => boundPort,
     starterPrompt: config.starterPrompt,
     defaultCwd: config.defaultCwd,
     permissionMode: config.permissionMode,
     dataDir: config.dataDir,
     historyLimit: config.historyLimit,
-    events: new EventBus(),
   });
 
-  const server = app.listen(config.port, HOST, () => {
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : config.port;
-    const url = `http://${HOST}:${port}`;
-    process.stdout.write(`Claude Agent UI: ${url}\n`);
-    if (flags.open) openBrowser(url);
-  });
+  const server = app.listen(config.port, HOST);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+  } catch (err) {
+    throw new ConfigError(describeListenError(err as NodeJS.ErrnoException, config.port));
+  }
 
-  server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE") {
-      process.stderr.write(
-        `Port ${config.port} is already in use. Start it on another port: claude-agent-ui --port ${config.port + 1}\n`,
-      );
-    } else {
-      process.stderr.write(`${err.message}\n`);
-    }
+  const address = server.address();
+  boundPort = typeof address === "object" && address ? address.port : config.port;
+  const url = `http://${HOST}:${boundPort}`;
+  process.stdout.write(`Claude Agent UI: ${url}\n`);
+  if (flags.open) openBrowser(url);
+
+  server.on("error", (err: Error) => {
+    process.stderr.write(`${err.message}\n`);
     process.exitCode = 1;
   });
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => server.close(() => process.exit(0)));
   }
+  return server;
 }
 
 /** True when this file is the program being run — npm's bin shim is a symlink, so resolve it. */

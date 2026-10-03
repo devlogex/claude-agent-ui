@@ -74,9 +74,15 @@ test("unknown options and missing values fail with a readable message", async ()
 test("out-of-range numbers and unknown permission modes are rejected", async () => {
   const home = await tempHome();
   assert.throws(() => load({ home, argv: ["--port", "99999"] }), /port must be a whole number/);
+  assert.throws(() => load({ home, argv: ["--port", "-1"] }), /port must be a whole number/);
   assert.throws(() => load({ home, argv: ["--concurrency", "0"] }), /concurrency must be/);
   assert.throws(() => load({ home, argv: ["--max-attempts", "1.5"] }), /maxAttempts must be/);
   assert.throws(() => load({ home, argv: ["--permission-mode", "yolo"] }), /permissionMode must be/);
+});
+
+test("--port 0 is accepted: it asks the OS for a free port", async () => {
+  const home = await tempHome();
+  assert.equal(load({ home, argv: ["--port", "0"] }).port, 0);
 });
 
 test("a named config file must exist; the default one need not", async () => {

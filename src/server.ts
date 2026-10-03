@@ -6,22 +6,29 @@ import { ClaudeCli, DEFAULT_PERMISSION_MODE, type PermissionMode } from "./claud
 import { discoverAgents, findAgent, toPublic } from "./domain/agents.ts";
 import { NEW_AGENT_TEMPLATE, ValidationError, createAgent, updateAgent } from "./domain/agentStore.ts";
 import { RunError, RunStore } from "./domain/runs.ts";
-import { EventBus } from "./events.ts";
 
 /** The only address this server ever binds. There is deliberately no option to change it. */
 export const HOST = "127.0.0.1";
 
 /**
+ * The port the guard accepts in a Host header. With `--port 0` the OS picks the port at listen(),
+ * so callers pass a getter and the guard reads the bound port per request instead of a stale 0.
+ */
+export type PortSource = number | (() => number);
+
+/**
  * Blocks DNS rebinding: a foreign page whose hostname resolves to 127.0.0.1 would be same-origin,
  * so require our own Host header, and for state-changing requests a matching (or absent) Origin.
  */
-export function loopbackGuard(port: number) {
-  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+export function loopbackGuard(port: PortSource) {
+  const allowed = (host: string, bound: number) =>
+    host === `127.0.0.1:${bound}` || host === `localhost:${bound}` || host === `[::1]:${bound}`;
   return (req: Request, res: Response, next: NextFunction) => {
+    const bound = typeof port === "function" ? port() : port;
     const host = req.headers.host ?? "";
     const origin = req.headers.origin;
     const safeMethod = req.method === "GET" || req.method === "HEAD";
-    if (!hosts.has(host) || (!safeMethod && origin !== undefined && origin !== `http://${host}`)) {
+    if (!allowed(host, bound) || (!safeMethod && origin !== undefined && origin !== `http://${host}`)) {
       res.status(403).json({ error: "forbidden host or origin" });
       return;
     }
@@ -32,7 +39,8 @@ export function loopbackGuard(port: number) {
 export interface AppOptions {
   home: string;
   cli: ClaudeCli;
-  port: number;
+  /** A number, or a getter when the bound port is only known after listen() — see {@link PortSource}. */
+  port: PortSource;
   starterPrompt: string;
   defaultCwd: string;
   permissionMode?: PermissionMode;
@@ -40,7 +48,6 @@ export interface AppOptions {
   historyLimit?: number;
   /** Directory holding the built web client; defaults to `web/` next to this module. */
   webRoot?: string;
-  events?: EventBus;
 }
 
 export function createApp(opts: AppOptions) {
