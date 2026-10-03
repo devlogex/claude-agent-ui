@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, api, listRuns, queryKeys } from "../lib/api.ts";
+import { ApiError, api, listRuns, queryKeys, type RunStatus } from "../lib/api.ts";
 
 /** Queue counters, from the task queue that M4 introduces. */
 export interface TaskStats {
@@ -17,6 +17,8 @@ export interface TaskStats {
 export interface SystemStatus {
   /** `null` until the run list has been read, and again if reading it fails. */
   running: number | null;
+  /** Runs parked on a prompt a human has to answer. The one counter that demands action. */
+  needsInput: number | null;
   queued: number | null;
   isLoading: boolean;
   error: unknown;
@@ -43,10 +45,13 @@ export function useSystemStatus(): SystemStatus {
     },
   });
 
+  const count = (status: RunStatus) => (runs.data ? runs.data.runs.filter((r) => r.status === status).length : null);
+
   return {
     // Not `?? 0`: a confident zero while the read is failing is the same lie as a confident
     // zero for a queue we cannot see.
-    running: runs.data ? runs.data.runs.filter((run) => run.status === "running").length : null,
+    running: count("running"),
+    needsInput: count("waiting"),
     queued: stats.data?.queued ?? null,
     isLoading: runs.isLoading,
     error: runs.error,

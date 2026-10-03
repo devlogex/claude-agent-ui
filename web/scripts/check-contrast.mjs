@@ -102,7 +102,7 @@ const PAIRS = [
   ["--color-fg-on-danger", "--color-danger-hover"],
 ];
 
-const STATUSES = ["running", "queued", "scheduled", "finished", "failed", "idle"];
+const STATUSES = ["running", "waiting", "queued", "scheduled", "finished", "failed", "idle"];
 
 const failures = [];
 let checked = 0;

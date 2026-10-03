@@ -202,6 +202,11 @@
   --status-running-bg: color-mix(in oklab, var(--green-500) 18%, transparent);
   --status-queued-fg: var(--amber-400);
   --status-queued-bg: color-mix(in oklab, var(--amber-500) 18%, transparent);
+  /* Same amber family as queued: both mean "stopped, waiting on something". They are told
+     apart by label and icon, which is how every state in this app is told apart. Separate
+     tokens so they can diverge without touching the components. */
+  --status-waiting-fg: var(--amber-400);
+  --status-waiting-bg: color-mix(in oklab, var(--amber-500) 18%, transparent);
   --status-scheduled-fg: var(--blue-300);
   --status-scheduled-bg: color-mix(in oklab, var(--blue-500) 18%, transparent);
   --status-finished-fg: var(--slate-300);
@@ -257,6 +262,8 @@
   --status-running-bg: color-mix(in oklab, var(--green-600) 14%, transparent);
   --status-queued-fg: var(--amber-800);
   --status-queued-bg: color-mix(in oklab, var(--amber-500) 20%, transparent);
+  --status-waiting-fg: var(--amber-800);
+  --status-waiting-bg: color-mix(in oklab, var(--amber-500) 20%, transparent);
   --status-scheduled-fg: var(--blue-700);
   --status-scheduled-bg: color-mix(in oklab, var(--blue-500) 14%, transparent);
   --status-finished-fg: var(--slate-600);
