@@ -246,10 +246,21 @@ falls back to an installed Google Chrome.
 The build order is not interchangeable. `tsup` cleans `dist/` first; running `vite` before it
 would delete the client that was just built.
 
-`web/scripts/` holds the dev tools that drive a real browser: `check:a11y` for the accessibility
-audit, `check:contrast` for the token pairs, and `shoot-demo.mjs` for the GIF above. They run
-against `web/scripts/mock-api.mjs`, which speaks the same wire format as the real server with
-entirely synthetic content. None of them ship.
+`web/scripts/` holds the dev tools: `check:a11y` for the accessibility audit, `check:contrast`
+for the token pairs, and `shoot-demo.mjs` for the GIF above. The browser-driving ones run against
+`web/scripts/mock-api.mjs`, which speaks the same wire format as the real server with entirely
+synthetic content. None of them ship.
+
+`check:a11y` drives the running client, so start the dev server first and leave port 3000 free —
+the audit starts and restarts its own mock API there, because it checks the empty and error
+screens, and `mock-api.mjs` fixes its scenario at launch:
+
+```sh
+npm run web:dev &                     # vite on 127.0.0.1:5174
+npm --prefix web run check:a11y       # starts its own mock-api.mjs on :3000
+```
+
+`check:contrast` parses `src/styles/tokens.css` directly and needs nothing running.
 
 ### Releasing
 

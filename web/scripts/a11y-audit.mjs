@@ -7,19 +7,96 @@
  * and give it back, that no state is signalled by colour alone, and that reduced motion is
  * honoured. Those are properties of the DOM, so they can only be checked against a real one.
  *
- * Needs the dev server and the mock API:
- *   node scripts/mock-api.mjs --port 3000 &
+ * Needs the dev server:
  *   npm run dev &
  *   node scripts/a11y-audit.mjs
+ *
+ * The mock API is this script's own: it starts `mock-api.mjs` on the port vite proxies to, and
+ * restarts it per scenario (section 5). So port 3000 must be free — a mock you started yourself
+ * would make the empty/error section audit whatever scenario *that* one was launched with, which
+ * is the hole this arrangement closes.
  */
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const base = "http://127.0.0.1:5174";
 const SCREENS = ["/agents", "/skills", "/tasks", "/schedule"];
 
-const browser = await chromium.launch({ channel: "chrome" });
+/** Must match vite.config.ts's proxy target, which reads the same variable. */
+const MOCK_PORT = Number(process.env.CLAUDE_AGENT_UI_PORT ?? 3000);
+const MOCK_SCRIPT = fileURLToPath(new URL("./mock-api.mjs", import.meta.url));
+
 const findings = [];
 const fail = (screen, check, detail) => findings.push({ screen, check, detail });
+
+/* ---------------------------------------------------------------------------------------
+ * The mock, under this script's control.
+ *
+ * Section 5 is the reason. A scenario is fixed when mock-api.mjs starts, so "render the empty
+ * state" means "run this screen against a mock that was started with --scenario empty" — there
+ * is no query parameter or header that switches it, and inventing one would mean the audit
+ * exercised a code path the app does not otherwise have.
+ * ------------------------------------------------------------------------------------ */
+let mock = null;
+
+async function stopMock() {
+  if (!mock) return;
+  const child = mock;
+  mock = null;
+  const ended = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await ended;
+}
+
+async function startMock(scenario) {
+  await stopMock();
+  const child = spawn(process.execPath, [MOCK_SCRIPT, "--port", String(MOCK_PORT), "--scenario", scenario], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  let exit;
+  child.once("exit", (code) => (exit = code ?? 0));
+
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if (exit !== undefined) {
+      throw new Error(
+        `mock API (--scenario ${scenario}) exited with ${exit} before it answered. Port ${MOCK_PORT} is ` +
+          `most likely already taken — this script starts its own mock, so stop yours and re-run.` +
+          (stderr.trim() ? `\n${stderr.trim()}` : ""),
+      );
+    }
+    try {
+      // Any status proves it is listening; under `--scenario error` every /api/ route is a 500.
+      await fetch(`http://127.0.0.1:${MOCK_PORT}/api/agents`);
+      mock = child;
+      return;
+    } catch {
+      if (Date.now() > deadline) {
+        child.kill("SIGKILL");
+        throw new Error(`mock API (--scenario ${scenario}) did not answer on port ${MOCK_PORT} within 10s.`);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+}
+
+// A killed browser or a thrown finding must not leave the mock holding the port.
+process.on("exit", () => mock?.kill("SIGKILL"));
+
+// vite is the one thing the caller still has to start, so say so in a sentence rather than
+// letting playwright report ERR_CONNECTION_REFUSED from inside page.goto().
+try {
+  await fetch(base);
+} catch {
+  console.error(`Nothing is serving ${base}. Start the dev server first:\n\n  npm run dev\n`);
+  process.exit(2);
+}
+
+await startMock("populated");
+const browser = await chromium.launch({ channel: "chrome" });
 
 async function withPage(opts, fn) {
   const context = await browser.newContext({
@@ -218,18 +295,62 @@ await withPage({ url: "/tasks", reducedMotion: "reduce" }, async (page) => {
 /* ---------------------------------------------------------------------------------------
  * 5. Empty / loading / error states exist and carry copy, on all four screens.
  * ------------------------------------------------------------------------------------ */
-for (const scenario of ["empty", "error"]) {
-  for (const url of SCREENS) {
-    await withPage({ url: `${url}?__scenario=${scenario}` }, async (page) => {
-      // The mock is restarted per scenario by the caller; here we just assert the screen is
-      // not blank and says something.
-      const text = await page.locator("main").innerText();
-      if (text.trim().length < 20) fail(url, `${scenario}-state`, "main is effectively blank");
-    });
-  }
+/** What each screen must actually say when its list comes back empty. */
+const EMPTY_COPY = {
+  "/agents": "No agents found",
+  "/skills": "No skills found",
+  "/tasks": "No tasks yet",
+  "/schedule": "No schedules yet",
+};
+
+await startMock("empty");
+for (const url of SCREENS) {
+  await withPage({ url }, async (page) => {
+    const main = page.locator("main");
+    // "Not blank" is what the old version checked, and it passed against a populated mock too.
+    // The copy is what distinguishes an empty state from a list that happens to have rows.
+    try {
+      await main.getByText(EMPTY_COPY[url], { exact: false }).first().waitFor({ timeout: 15_000 });
+    } catch {
+      const text = (await main.innerText()).trim();
+      fail(url, "empty-state", `main does not say "${EMPTY_COPY[url]}"; it says: ${text.slice(0, 160)}`);
+    }
+    // An empty state is a message *and* an action (ux-guidelines No. 79), and the action has to
+    // be reachable, so it is a real control rather than a sentence.
+    if (!(await main.locator("button, a[href]").count())) {
+      fail(url, "empty-state", "nothing actionable in main");
+    }
+  });
+}
+
+await startMock("error");
+for (const url of SCREENS) {
+  await withPage({ url }, async (page) => {
+    // ErrorState is the only thing on these screens with role="alert", which is also what makes
+    // the failure audible rather than only visible.
+    //
+    // Waited for, not sampled: a 500 is retried twice before the query gives up (queryClient.ts),
+    // and the screen is legitimately still a skeleton during the backoff — which has no network
+    // traffic, so `networkidle` resolves right through the middle of it.
+    const alert = page.locator('main [role="alert"]').first();
+    try {
+      await alert.waitFor({ timeout: 20_000 });
+    } catch {
+      const text = (await page.locator("main").innerText()).trim();
+      return fail(url, "error-state", `no role="alert" in main; it says: ${text.slice(0, 160)}`);
+    }
+    const said = (await alert.innerText()).trim();
+    if (said.length < 20) fail(url, "error-state", `the alert says only "${said}"`);
+    // The server's message has to survive to the screen; a generic "something went wrong" hides
+    // the one sentence the user could act on.
+    if (!/EACCES|could not be read/i.test(said)) {
+      fail(url, "error-state", `the alert does not carry the server's message: ${said.slice(0, 160)}`);
+    }
+  });
 }
 
 await browser.close();
+await stopMock();
 
 if (findings.length === 0) {
   console.log("a11y audit: no findings.");
