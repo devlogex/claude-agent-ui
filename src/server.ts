@@ -140,9 +140,12 @@ export function createApp(opts: AppOptions) {
   /**
    * Checks a draft without writing it, so the editor can mark a bad field while the user is
    * still typing. Always 200: an invalid draft is a normal state mid-edit, not a failed request.
+   *
+   * Per kind, because the two differ on one rule: Claude Code loads a SKILL.md with no `name`
+   * and calls it by its directory, while `claude --agent` has no such fallback to fall back on.
    */
-  const validateRoute = (req: Request, res: Response) => {
-    const { fields } = checkDefinition(req.body?.content);
+  const validateRoute = (kind: "agent" | "skill") => (req: Request, res: Response) => {
+    const { fields } = checkDefinition(req.body?.content, { kind });
     res.json({ valid: fields.length === 0, fields });
   };
 
@@ -154,7 +157,7 @@ export function createApp(opts: AppOptions) {
   );
 
   // Registered before "/api/agents/:id" so "validate" is never read as an agent id.
-  app.post("/api/agents/validate", validateRoute);
+  app.post("/api/agents/validate", validateRoute("agent"));
 
   app.get(
     "/api/agents/:id",
@@ -211,7 +214,7 @@ export function createApp(opts: AppOptions) {
     }),
   );
 
-  app.post("/api/skills/validate", validateRoute);
+  app.post("/api/skills/validate", validateRoute("skill"));
 
   app.get(
     "/api/skills/:id",

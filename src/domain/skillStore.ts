@@ -21,11 +21,14 @@ Describe the procedure step by step. Keep it short enough to read in one pass.
  *
  * `forNewPath` is set only by `createSkill`, which turns `name` into the skill's directory. An
  * edit is pinned to the existing directory by the `name === dirName` rule below instead.
+ *
+ * `name` comes back undefined for the one file Claude Code accepts without it: a SKILL.md that
+ * leaves `name` out and takes the directory name instead.
  */
-export function validateSkillContent(content: unknown, opts: CheckOptions = {}): { name: string } {
-  const { fields, name } = checkDefinition(content, opts);
+export function validateSkillContent(content: unknown, opts: CheckOptions = {}): { name: string | undefined } {
+  const { fields, name } = checkDefinition(content, { ...opts, kind: "skill" });
   if (fields.length > 0) throw new ValidationError(fields.map((f) => f.message).join("; "), 400, fields);
-  return { name: name! };
+  return { name };
 }
 
 function writableRoots(home: string, projectDir?: string) {
@@ -67,7 +70,8 @@ export async function createSkill(
   content: unknown,
   opts: CreateSkillOptions = {},
 ): Promise<{ id: string; file: string; dir: string; scope: WritableScope }> {
-  const { name } = validateSkillContent(content, { forNewPath: true });
+  // `forNewPath` keeps `name` required even for a skill, because the directory is built from it.
+  const name = validateSkillContent(content, { forNewPath: true }).name as string;
   const scope = opts.scope === undefined ? "user" : opts.scope;
   if (!isWritableScope(scope)) throw new ValidationError('scope must be "user" or "project"', 400);
   const dir = assertInsideSkillsDir(home, path.join(rootFor(home, scope, opts.projectDir), name), opts.projectDir);
@@ -93,7 +97,9 @@ async function editable(home: string, id: string, projectDir?: string) {
 export async function updateSkill(home: string, id: string, content: unknown, projectDir?: string): Promise<string> {
   const skill = await editable(home, id, projectDir);
   const { name } = validateSkillContent(content);
-  if (name !== skill.dirName) {
+  // No `name` at all is the one case that cannot drift: Claude Code then reads the skill under
+  // its directory name, which is the value this rule is trying to pin it to anyway.
+  if (name !== undefined && name !== skill.dirName) {
     // Claude Code finds a skill by its directory, so a `name` that drifts from it is invisible.
     // Renaming the directory under an open editor would strand its assets, so say so instead.
     throw new ValidationError(`\`name\` must stay "${skill.dirName}" to match the skill's directory`, 400, [

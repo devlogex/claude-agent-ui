@@ -37,7 +37,10 @@ export const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 export interface Checked extends Partial<ParsedFile> {
   /** Empty when the content is valid. Reported together so an editor can mark every bad key at once. */
   fields: FieldError[];
-  /** Trimmed `name` from the frontmatter; only set when there is no `name` error. */
+  /**
+   * Trimmed `name` from the frontmatter. Unset when `name` is wrong, and also when a skill simply
+   * left it out — a legal file whose name comes from its directory instead.
+   */
   name?: string;
 }
 
@@ -47,6 +50,11 @@ export interface CheckOptions {
    * file or directory name. Off for every check of a file that already exists.
    */
   forNewPath?: boolean;
+  /**
+   * Which kind of definition this is, because Claude Code requires `name` of one and not the
+   * other. Defaults to `"agent"`, the stricter rule.
+   */
+  kind?: "agent" | "skill";
 }
 
 /**
@@ -56,6 +64,11 @@ export interface CheckOptions {
  * the frontmatter has to parse, `name` has to be there and carry neither a leading `-` nor the
  * `:` reserved for plugin-scoped ids, and `description` has to say when to reach for the file.
  * `forNewPath` adds our own, stricter path-safety rule on top.
+ *
+ * `kind: "skill"` drops the `name` requirement, because Claude Code loads a SKILL.md without one
+ * and falls back to the directory name — measured against the CLI, not assumed. A skill we are
+ * about to create still needs one, since its directory is built from it, so `forNewPath` brings
+ * the requirement back.
  *
  * Every rule is applied to the trimmed `name`, which is also the one returned, so surrounding
  * whitespace can neither smuggle a name past a rule nor fail one: `name: "ok-1 "` creates `ok-1`.
@@ -81,8 +94,11 @@ export function checkDefinition(content: unknown, opts: CheckOptions = {}): Chec
   // `name: " -dash"` would pass the leading-`-` rule and still run as `-dash`.
   const raw = parsed.data.name;
   const name = typeof raw === "string" ? raw.trim() : raw;
+  // A skill may leave `name` out entirely; a `name` it does write still has to be a usable one.
+  const omitted = raw === undefined || raw === null;
+  const nameRequired = opts.kind !== "skill" || opts.forNewPath === true || !omitted;
   if (typeof name !== "string" || !name) {
-    fields.push({ field: "name", message: "`name` is required" });
+    if (nameRequired) fields.push({ field: "name", message: "`name` is required" });
   } else if (name.includes(":")) {
     // Claude Code reserves `:` for plugin-scoped ids and refuses to load the file otherwise.
     fields.push({ field: "name", message: "`name` cannot contain `:`, which is reserved for plugin names" });
@@ -98,7 +114,8 @@ export function checkDefinition(content: unknown, opts: CheckOptions = {}): Chec
     fields.push({ field: "description", message: "`description` is required" });
   }
 
-  return { ...parsed, fields, name: fields.some((f) => f.field === "name") ? undefined : (name as string) };
+  const named = typeof name === "string" && !fields.some((f) => f.field === "name");
+  return { ...parsed, fields, name: named ? (name as string) : undefined };
 }
 
 /**

@@ -106,6 +106,46 @@ test("validation: yaml, required fields, name pattern, with the field named", ()
   assert.deepEqual(validateSkillContent(skillMd("ok-1")), { name: "ok-1" });
 });
 
+// T-12: measured against claude 2.1.288 — a SKILL.md carrying only a `description` loads, and the
+// CLI reads it under its directory name. `valid` means "Claude Code will load this", so it does.
+test("a skill may leave `name` out: Claude Code reads it as the directory name", () => {
+  assert.deepEqual(validateSkillContent("---\ndescription: No name here\n---\n"), { name: undefined });
+  // A bare `name:` is YAML null, which is the same as not writing the key at all.
+  assert.deepEqual(validateSkillContent("---\nname:\ndescription: No name here\n---\n"), { name: undefined });
+  // An empty or blank `name` is a written one, and a written one still has to be usable.
+  for (const written of ['""', '" "', "[]"]) {
+    assert.throws(
+      () => validateSkillContent(`---\nname: ${written}\ndescription: Present but unusable\n---\n`),
+      /`name` is required/,
+    );
+  }
+  // `createSkill` builds the directory from `name`, so there it stays required.
+  assert.throws(
+    () => validateSkillContent("---\ndescription: No name here\n---\n", { forNewPath: true }),
+    /`name` is required/,
+  );
+});
+
+test("a name-less skill lists cleanly and stays saveable", async () => {
+  const home = await tempHome();
+  const dir = path.join(home, ".claude", "skills", "noname");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "SKILL.md"), "---\ndescription: No name here\n---\n\n# No name\n");
+
+  const skill = (await discoverSkills(home)).find((s) => s.dirName === "noname")!;
+  assert.equal(skill.valid, true);
+  assert.equal(skill.error, null);
+  assert.equal(skill.name, "noname");
+  assert.equal(skill.ref, "noname");
+
+  // The `name === dirName` pin has nothing to pin: an absent name already reads as the directory.
+  const next = "---\ndescription: Still no name\n---\n\n# No name\n";
+  await updateSkill(home, skill.id, next);
+  assert.equal(await readFile(skill.filePath, "utf8"), next);
+  // A name that drifts is still refused, name-less file or not.
+  await rejects(updateSkill(home, skill.id, skillMd("renamed")), /must stay "noname"/, 400);
+});
+
 test("update rewrites SKILL.md in place", async () => {
   const home = await fixtureHome();
   const writing = (await discoverSkills(home)).find((s) => s.ref === "writing")!;

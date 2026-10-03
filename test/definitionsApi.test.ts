@@ -196,6 +196,18 @@ test("the validate routes check a draft without writing it", async () => {
       fields: [{ field: "name", message: "`name` cannot start with `-`" }],
     });
 
+    // T-12: the two kinds differ on exactly one rule. Claude Code loads a SKILL.md with no
+    // `name` and calls it by its directory; `claude --agent` has no directory to fall back on.
+    const noName = { content: "---\ndescription: No name here\n---\n" };
+    assert.deepEqual(await api("POST", "/api/skills/validate", noName).then((r) => r.body), {
+      valid: true,
+      fields: [],
+    });
+    assert.deepEqual(await api("POST", "/api/agents/validate", noName).then((r) => r.body), {
+      valid: false,
+      fields: [{ field: "name", message: "`name` is required" }],
+    });
+
     // The editor opens files it did not create. A name this app would not generate is not an
     // error to show while someone edits that file — only the create route builds a path from it.
     const existing = await api("POST", "/api/agents/validate", { content: agentMd("Code-Reviewer") });

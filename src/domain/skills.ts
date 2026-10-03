@@ -11,7 +11,7 @@ export const SKILL_FILE = "SKILL.md";
 
 export interface SkillInfo {
   id: string;
-  /** Frontmatter `name`, falling back to the directory name. */
+  /** Frontmatter `name`, falling back to the directory name — which Claude Code does too. */
   name: string;
   /**
    * How the skill is referenced in a prompt or an agent's `skills:` list: the bare name for user
@@ -126,7 +126,7 @@ async function readSkillDir(dir: string, origin: Origin): Promise<SkillInfo> {
 
   // Checked exactly as the editor checks a draft, so the list and the editor never disagree about
   // whether a skill is usable. `forNewPath` is off: the directory already exists.
-  const { data, fields } = checkDefinition(content);
+  const { data, fields } = checkDefinition(content, { kind: "skill" });
   const name = typeof data?.name === "string" && data.name.trim() ? data.name.trim() : dirName;
   return {
     ...base,

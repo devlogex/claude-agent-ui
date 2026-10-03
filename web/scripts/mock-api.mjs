@@ -439,6 +439,7 @@ createServer((req, res) => {
   // Always 200, like the real route: an invalid draft mid-edit is a normal state. The mock
   // judges only the two rules the editor shows inline.
   if (url.pathname === "/api/agents/validate" || url.pathname === "/api/skills/validate") {
+    const isSkill = url.pathname === "/api/skills/validate";
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
@@ -447,13 +448,15 @@ createServer((req, res) => {
       if (!content.startsWith("---")) {
         fields.push({ field: "frontmatter", message: "missing frontmatter (file must start with a --- block)" });
       } else {
-        const name = /^name:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
+        const written = /^name:[ \t]*(.*)$/m.exec(content)?.[1];
+        const name = written?.trim() ?? "";
         const description = /^description:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
         // These are the loadability rules, not the path-safety one. `/validate` judges a file
         // that already exists, and `NAME_RE` is only applied where a new path gets built from
-        // the name — so an existing `Code-Reviewer` must validate clean here.
+        // the name — so an existing `Code-Reviewer` must validate clean here. A skill may also
+        // leave `name` out: Claude Code loads it and calls it by its directory.
         if (!name) {
-          fields.push({ field: "name", message: "`name` is required" });
+          if (!isSkill || written !== undefined) fields.push({ field: "name", message: "`name` is required" });
         } else if (name.includes(":")) {
           fields.push({ field: "name", message: "`name` cannot contain `:`, which is reserved for plugin names" });
         } else if (name.startsWith("-")) {
