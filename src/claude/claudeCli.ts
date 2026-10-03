@@ -59,9 +59,51 @@ export interface BackgroundSession {
   cwd: string;
   kind: string;
   name?: string;
+  /** `busy` | `waiting` | `idle`. Absent means the CLI did not report one — unknown, not idle. */
   status?: string;
+  /** `working` | `blocked` | `done` | `failed` | `stopped`. */
   state?: string;
+  /** Only ever set alongside `status: "waiting"`; says what the session is waiting for. */
+  waitingFor?: string;
   startedAt?: number;
+}
+
+/**
+ * What the CLI says a session is doing. The raw `status`/`state`/`waitingFor` strings are
+ * read here and nowhere else in the codebase.
+ */
+export type SessionPhase = "waiting" | "done" | "failed" | "stopped" | "idle" | "working";
+
+/** The CLI's `waitingFor` for a pending tool permission. */
+const PERMISSION_WAIT = "permission prompt";
+
+export interface SessionWait {
+  /** `permission` only when the CLI named a permission prompt; everything else is `other`. */
+  reason: "permission" | "other";
+  /** The CLI's own `waitingFor`, verbatim. Empty when it reported a wait with no reason. */
+  detail: string;
+}
+
+export function sessionPhase(session: BackgroundSession): SessionPhase {
+  // A terminal `state` is the CLI's own verdict, and it outranks the liveness fields below:
+  // those go stale the moment the background job record is reaped.
+  if (session.state === "failed") return "failed";
+  if (session.state === "stopped") return "stopped";
+  if (session.state === "done") return "done";
+  // The CLI reports `waiting` ahead of idle/busy, so a session parked on a prompt never
+  // looks idle — but without this branch it is indistinguishable from one doing work.
+  if (session.status === "waiting") return "waiting";
+  // No pid and no status: the job record is gone and we were never told how it ended.
+  if (session.pid === undefined && session.status === undefined) return "stopped";
+  if (session.status === "idle") return "idle";
+  return "working";
+}
+
+/** Null unless the session is parked waiting for a human. */
+export function sessionWait(session: BackgroundSession): SessionWait | null {
+  if (sessionPhase(session) !== "waiting") return null;
+  const detail = typeof session.waitingFor === "string" ? session.waitingFor : "";
+  return { reason: detail === PERMISSION_WAIT ? "permission" : "other", detail };
 }
 
 const BG_ID = /backgrounded\s*·\s*([0-9a-f]+)/;

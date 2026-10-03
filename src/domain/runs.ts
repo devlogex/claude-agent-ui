@@ -6,15 +6,22 @@ import {
   ClaudeCli,
   DEFAULT_PERMISSION_MODE,
   type PermissionMode,
+  type SessionPhase,
+  type SessionWait,
   isPermissionMode,
+  sessionPhase,
+  sessionWait,
 } from "../claude/claudeCli.ts";
 import { findTranscript, readFinalMessage } from "../claude/transcript.ts";
 import { expandHome } from "../config.ts";
 import { type EventBus, RUN_EVENTS } from "../events.ts";
 import { JsonStore } from "../store/jsonStore.ts";
 
-/** "unknown" = `claude agents --json` could not be read this time. */
-export type RunStatus = "running" | "finished" | "stopped" | "missing" | "unknown";
+/**
+ * "waiting" = parked on a prompt a human has to answer; not finished, and not progress either.
+ * "unknown" = `claude agents --json` could not be read this time.
+ */
+export type RunStatus = "running" | "waiting" | "finished" | "failed" | "stopped" | "missing" | "unknown";
 
 export interface RunRecord {
   runId: string;
@@ -32,6 +39,8 @@ export interface RunsResponse {
 
 export interface RunView extends RunRecord {
   status: RunStatus;
+  /** Non-null only while `status === "waiting"`; what the CLI says it is waiting for. */
+  waiting: SessionWait | null;
   endedAt: number | null;
   finalText: string | null;
   attachCommand: string;
@@ -46,11 +55,23 @@ export class RunError extends Error {
   }
 }
 
+const PHASE_STATUS: Record<SessionPhase, RunStatus> = {
+  waiting: "waiting",
+  done: "finished",
+  idle: "finished",
+  failed: "failed",
+  stopped: "stopped",
+  working: "running",
+};
+
 export function mapStatus(session: BackgroundSession | undefined): RunStatus {
   if (!session) return "missing";
-  if (session.state === "stopped" || (session.pid === undefined && session.status === undefined)) return "stopped";
-  if (session.status === "idle") return "finished";
-  return "running";
+  return PHASE_STATUS[sessionPhase(session)];
+}
+
+/** Not finished: either working or parked on a prompt. Neither has a final message to read. */
+export function isActive(status: RunStatus): boolean {
+  return status === "running" || status === "waiting";
 }
 
 const TRUST_HINT = /not trusted/i;
@@ -188,9 +209,12 @@ export class RunStore {
         const session = byId.get(run.runId);
         const sessionId = run.sessionId ?? session?.sessionId ?? null;
         const status: RunStatus = sessions ? mapStatus(session) : "unknown";
+        // A waiting run is not finished: reading a "final" message here would report the
+        // last thing it said before the prompt as its result.
+        const waiting = status === "waiting" && session ? sessionWait(session) : null;
         let finalText: string | null = null;
         let endedAt: number | null = null;
-        if (status !== "running" && sessionId) {
+        if (!isActive(status) && sessionId) {
           const msg = await this.finalMessage(sessionId).catch(() => null);
           finalText = msg?.text ?? null;
           endedAt = msg?.timestamp ? Date.parse(msg.timestamp) : null;
@@ -200,6 +224,7 @@ export class RunStore {
           permissionMode: run.permissionMode ?? DEFAULT_PERMISSION_MODE,
           sessionId,
           status,
+          waiting,
           endedAt,
           finalText,
           attachCommand: `claude attach ${run.runId}`,
@@ -257,7 +282,9 @@ export class RunStore {
   }
 
   async stopFinished(): Promise<string[]> {
-    const finished = (await this.list()).runs.filter((r) => r.status === "finished");
+    // Ended one way or the other, so the session is just holding a slot. A `waiting` run is
+    // not in here on purpose: it has not ended, and killing it is the user's call.
+    const finished = (await this.list()).runs.filter((r) => r.status === "finished" || r.status === "failed");
     const stopped: string[] = [];
     for (const run of finished) {
       try {

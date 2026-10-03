@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { type BackgroundSession, CliError, ClaudeCli, type StartBackgroundOptions } from "../src/claude/claudeCli.ts";
+import {
+  type BackgroundSession,
+  CliError,
+  ClaudeCli,
+  type StartBackgroundOptions,
+  sessionWait,
+} from "../src/claude/claudeCli.ts";
 import { MAX_PROMPT_LENGTH, RunStore, mapStatus } from "../src/domain/runs.ts";
 import { type BusEvent, EventBus } from "../src/events.ts";
 import { put, tempHome } from "./helpers.ts";
@@ -14,6 +20,47 @@ test("mapStatus: busy→running, idle→finished, stopped, missing", () => {
   assert.equal(mapStatus({ ...base, pid: 1, status: "idle", state: "done" }), "finished");
   assert.equal(mapStatus({ ...base, state: "stopped" }), "stopped");
   assert.equal(mapStatus(undefined), "missing");
+});
+
+test("mapStatus: a session parked on a prompt is waiting, not running", () => {
+  const base = { id: "a", sessionId: "s", cwd: "/", kind: "background" };
+  // The CLI pairs status:"waiting" with state:"blocked"; without the waiting branch this
+  // fell through to "running" and a stuck run was indistinguishable from a busy one.
+  assert.equal(
+    mapStatus({ ...base, pid: 1, status: "waiting", state: "blocked", waitingFor: "permission prompt" }),
+    "waiting",
+  );
+  assert.equal(
+    mapStatus({ ...base, pid: 1, status: "waiting", state: "blocked", waitingFor: "input needed" }),
+    "waiting",
+  );
+});
+
+test("mapStatus: a terminal state outranks the liveness fields", () => {
+  const base = { id: "a", sessionId: "s", cwd: "/", kind: "background" };
+  // state:"failed" used to be dropped: with the job record still around it read as
+  // "finished" — a failed run reported as a successful one — and as "stopped" once reaped.
+  assert.equal(mapStatus({ ...base, pid: 1, status: "idle", state: "failed" }), "failed");
+  assert.equal(mapStatus({ ...base, state: "failed" }), "failed");
+  // Reaped but the CLI told us it completed: "finished", not the "no pid" guess of "stopped".
+  assert.equal(mapStatus({ ...base, state: "done" }), "finished");
+  // Reaped with nothing reported at all: we still cannot say more than "stopped".
+  assert.equal(mapStatus({ ...base }), "stopped");
+});
+
+test("sessionWait: the permission prompt is named; every other wait is soft", () => {
+  const base = { id: "a", sessionId: "s", cwd: "/", kind: "background", pid: 1, state: "blocked" };
+  assert.deepEqual(sessionWait({ ...base, status: "waiting", waitingFor: "permission prompt" }), {
+    reason: "permission",
+    detail: "permission prompt",
+  });
+  assert.deepEqual(sessionWait({ ...base, status: "waiting", waitingFor: "sandbox request" }), {
+    reason: "other",
+    detail: "sandbox request",
+  });
+  // A wait with no reason reported is still a wait; we do not invent a detail for it.
+  assert.deepEqual(sessionWait({ ...base, status: "waiting" }), { reason: "other", detail: "" });
+  assert.equal(sessionWait({ ...base, status: "busy", state: "working" }), null);
 });
 
 /** Stands in for the real binary so the suite never needs `claude` installed. */
@@ -165,6 +212,32 @@ test("list: running has no final text; finished reads it from the transcript", a
   cli.sessions = [];
   [view] = (await store.list()).runs;
   assert.equal(view.status, "missing");
+});
+
+test("list: a waiting run carries its reason and is never given a final message", async () => {
+  const { home, cli, store } = await setup();
+  await store.start("a", home);
+  // The transcript already has text in it — the last thing said before the prompt opened.
+  await put(
+    path.join(home, ".claude", "projects", "-x", "abcd1234-full.jsonl"),
+    JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "text", text: "Let me edit that." }] } }),
+  );
+  Object.assign(cli.sessions[0], { status: "waiting", state: "blocked", waitingFor: "permission prompt" });
+
+  const [view] = (await store.list()).runs;
+  assert.equal(view.status, "waiting");
+  assert.deepEqual(view.waiting, { reason: "permission", detail: "permission prompt" });
+  // Reporting that as the result would announce a parked run as a finished one.
+  assert.equal(view.finalText, null);
+  // The approval path for 0.1.0: answer it in a terminal.
+  assert.equal(view.attachCommand, "claude attach abcd1234");
+
+  cli.sessions[0].status = "idle";
+  cli.sessions[0].state = "done";
+  const [done] = (await store.list()).runs;
+  assert.equal(done.status, "finished");
+  assert.equal(done.waiting, null);
+  assert.equal(done.finalText, "Let me edit that.");
 });
 
 test("the final-message cache does not outlive the runs it was built for", async () => {
