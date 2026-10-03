@@ -36,6 +36,11 @@ describe("describeCron", () => {
     ["0 0 1 1 *", "the 1st of January at 00:00"],
     ["0 0 1 jan,jul *", "the 1st of January and July at 00:00"],
     ["*/10 9 * * *", "every 10 minutes between 09:00 and 09:59"],
+    // A bounded range that fires on exactly the values the open form fires on is the same
+    // rhythm, written longhand: `0-55/5` and `*/5` are both those twelve minutes.
+    ["0-55/5 * * * *", "every 5 minutes"],
+    ["0-57/5 * * * *", "every 5 minutes"],
+    ["0 0-22/2 * * *", "every 2 hours, on the hour"],
   ])("%s → %s", (expression, sentence) => {
     expect(describeCron(expression)).toBe(sentence);
   });
@@ -75,6 +80,21 @@ describe("describeCron", () => {
       ["0 9 1 * 1", "day-of-month and day-of-week together"],
       // Eight separate clock times is a table, not a sentence.
       ["0 0,3,6,9,12,15,18,21 * * *", "more times than a sentence can carry"],
+      // Seven days of the month, likewise: correct as a list and worse than reading `8-14`.
+      ["0 4 8-14 * *", "more days than a sentence can carry"],
+      // A step range that stops early is not the rhythm it looks like. Each of these fires on
+      // strictly fewer values than the open `* / n` form, verified against croner's own
+      // `nextRun` from 2026-03-02T00:00:00Z in UTC — 22:23 never fires for the first, :35
+      // through :55 never fire for the second, and the third fires four times a day, not
+      // twelve. A sentence that says otherwise is exactly the lie this file refuses to tell.
+      ["23 0-20/2 * * *", "an hour step that stops at 20"],
+      ["0-30/5 * * * *", "a minute step that stops at 30"],
+      ["0 0-6/2 * * *", "an hour step that stops at 06"],
+      ["0-20/5 9 * * *", "a minute step that stops at 20, inside one hour"],
+      ["0-30/10 * * * * *", "a second step that stops at 30"],
+      // Same mistake in the day-of-month field, which never checked its bounds at all.
+      ["0 4 8-20/2 * *", "a day-of-month step that neither starts at the 1st nor reaches the 31st"],
+      ["0 4 1-29/2 * *", "a day-of-month step that stops before the 31st"],
     ])("%s (%s)", (expression) => {
       expect(describeCron(expression)).toBeNull();
     });

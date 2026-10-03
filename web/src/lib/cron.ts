@@ -142,6 +142,24 @@ function expandPart(part: string, min: number, max: number, aliases?: Record<str
   return [single];
 }
 
+/**
+ * Is a step field a rhythm, or a bounded burst wearing a rhythm's clothes?
+ *
+ * The open form `* / 2` on the hour field fires every two hours, all day. `0-6/2` fires three
+ * times and then stops until tomorrow. Both parse to `kind: "step"` with the same `step`, and
+ * every sentence below ("every 2 hours") is only true of the first — the upper bound is the
+ * whole difference, and dropping it tells the operator the job runs more often than it does.
+ *
+ * A bounded range earns the sentence only when it fires on exactly the values the open form
+ * would: it starts at the field's floor, and it runs at least as far as its own last fire.
+ * `0-57/5` fires on the same twelve minutes as `* / 5`, so both get "every 5 minutes";
+ * `0-30/5` does not, and falls back to the raw expression.
+ */
+function coversWholeRange(field: Extract<Field, { kind: "step" }>, min: number, max: number): boolean {
+  if (field.from !== min) return false;
+  return field.to >= max - ((max - min) % field.step);
+}
+
 function readNumber(raw: string, aliases?: Record<string, number>): number | null {
   const text = raw.trim();
   if (!text) return null;
@@ -161,6 +179,13 @@ function list(parts: string[]): string {
  * readable at a glance. Past this the raw expression is the better answer, so we return null.
  */
 const MAX_LISTED_TIMES = 4;
+
+/**
+ * And how many days of the month, for the same reason. "the 8th, 9th, 10th, 11th, 12th, 13th
+ * and 14th of every month" is correct and still harder to read than the `8-14` it came from.
+ * Past this many, the expression is the better sentence.
+ */
+const MAX_LISTED_DAYS = 4;
 
 interface DayPhrase {
   /** The sentence subject: "every weekday", "the 1st of every month". */
@@ -205,12 +230,14 @@ function describeDays(dom: Field, month: Field, dow: Field): DayPhrase | null {
 
   if (domRestricted) {
     if (dom.kind === "step") {
+      if (!coversWholeRange(dom, 1, 31)) return null;
       const every = dom.step === 1 ? "every day" : `every ${ordinal(dom.step)} day`;
       const monthPhrase = describeMonths(month);
       if (monthPhrase === null) return null;
       const subject = monthPhrase ? `${every} of ${monthPhrase}` : `${every} of the month`;
       return { subject, qualifier: `on ${subject.replace(/^every /, "every ")}` };
     }
+    if (dom.values.length > MAX_LISTED_DAYS) return null;
     const dayList = list(dom.values.map((d) => ordinal(d)));
     const monthPhrase = describeMonths(month);
     if (monthPhrase === null) return null;
@@ -240,7 +267,7 @@ function describeTime(second: Field | null, minute: Field, hour: Field): TimePhr
   if (second && second.kind !== "values") {
     if (minute.kind !== "every" || hour.kind !== "every") return null;
     if (second.kind === "every") return { kind: "interval", text: "every second" };
-    if (second.from !== 0) return null;
+    if (!coversWholeRange(second, 0, 59)) return null;
     return { kind: "interval", text: `every ${second.step} seconds` };
   }
   if (second && second.values.length > 1) return null;
@@ -248,7 +275,7 @@ function describeTime(second: Field | null, minute: Field, hour: Field): TimePhr
 
   // --- A minute or hour rhythm ----------------------------------------------------------
   if (minute.kind === "step") {
-    if (secondValue !== 0 || minute.from !== 0) return null;
+    if (secondValue !== 0 || !coversWholeRange(minute, 0, 59)) return null;
     const rhythm = minute.step === 1 ? "every minute" : `every ${minute.step} minutes`;
     if (hour.kind === "every") return { kind: "interval", text: rhythm };
     if (hour.kind === "values" && hour.values.length === 1) {
@@ -269,7 +296,7 @@ function describeTime(second: Field | null, minute: Field, hour: Field): TimePhr
   }
 
   if (hour.kind === "step") {
-    if (hour.from !== 0 || minute.values.length !== 1 || secondValue !== 0) return null;
+    if (!coversWholeRange(hour, 0, 23) || minute.values.length !== 1 || secondValue !== 0) return null;
     const m = minute.values[0]!;
     const rhythm = hour.step === 1 ? "every hour" : `every ${hour.step} hours`;
     return { kind: "interval", text: m === 0 ? `${rhythm}, on the hour` : `${rhythm} at :${pad(m)}` };
