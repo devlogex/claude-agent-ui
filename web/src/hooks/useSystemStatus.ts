@@ -32,11 +32,17 @@ export function useSystemStatus(): SystemStatus {
 
   const count = (status: RunStatus) => (runs.data ? runs.data.runs.filter((r) => r.status === status).length : null);
 
+  const inFlight = count("running");
+  const parked = count("waiting");
+
   return {
+    // Waiting counts as running, exactly as `stats.waiting ⊂ stats.running` does server-side: a
+    // parked session is still occupying a slot and has not finished. Counting it separately
+    // would have the bar say "1 running" while the Tasks screen says "Running 2".
     // Not `?? 0`: a confident zero while the read is failing is the same lie as a confident
     // zero for a queue we cannot see.
-    running: count("running"),
-    needsInput: count("waiting"),
+    running: inFlight === null || parked === null ? null : inFlight + parked,
+    needsInput: parked,
     queued: stats.data?.queued ?? null,
     maxConcurrent: stats.data?.maxConcurrent ?? null,
     isLoading: runs.isLoading,

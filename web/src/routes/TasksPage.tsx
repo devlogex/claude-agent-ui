@@ -12,14 +12,26 @@ import { Select } from "../components/ui/field.tsx";
 import {
   ApiError,
   cancelTask,
+  getTaskStats,
   listTasks,
   queryKeys,
   retryTask,
   updateTask,
   type TaskView,
 } from "../lib/api.ts";
-import { PRIORITY_LEVELS, taskBadge, taskDetail, taskGroup } from "../lib/taskStatus.ts";
+import { PRIORITY_LEVELS, pathTail, taskBadge, taskGroup, taskReason, taskTiming } from "../lib/taskStatus.ts";
 import { cn, plural, relativeTime } from "../lib/utils.ts";
+
+/**
+ * Columns that are supporting detail rather than the thing being scanned. Below `md` they
+ * collapse to zero width — a 390px viewport has room for the state, the name and the action,
+ * and nothing is lost because all three are in the row expansion.
+ *
+ * Collapsed rather than `display: none`: the group headers and the expansion row span all six
+ * columns, and a `colSpan={6}` conjures a hidden column straight back into the table model with
+ * no declared width, which then eats the title's. Zero width leaves the model intact.
+ */
+const SECONDARY = "max-md:w-0 max-md:overflow-hidden max-md:p-0";
 
 /**
  * The Tasks screen: every run the queue knows about, grouped by what it is doing.
@@ -35,6 +47,8 @@ import { cn, plural, relativeTime } from "../lib/utils.ts";
  */
 export function TasksPage() {
   const tasks = useQuery({ queryKey: queryKeys.tasks, queryFn: listTasks });
+  // Only for the concurrency limit: the counts on this screen come from the list itself.
+  const stats = useQuery({ queryKey: queryKeys.taskStats, queryFn: getTaskStats });
   const [creating, setCreating] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -123,24 +137,53 @@ export function TasksPage() {
           }
         />
       ) : (
-        <table className="w-full border-collapse text-sm">
+        /* table-fixed, with the widths declared once on the header row: a long failure message
+           in one cell must not be able to squeeze the title, which is the column people are
+           actually scanning. The widths live on the <th> rather than a <colgroup> because the
+           three secondary columns are display:none below `md` — a colgroup maps by column
+           index, so it would mis-assign the widths the moment a column disappears. */
+        <table className="w-full table-fixed border-collapse text-sm">
           <caption className="sr-only">Tasks, grouped by state</caption>
-          <thead className="sr-only">
-            <tr>
-              <th scope="col">Status</th>
-              <th scope="col">Title</th>
-              <th scope="col">Agent</th>
-              <th scope="col">Working directory</th>
-              <th scope="col">Time</th>
-              <th scope="col">Actions</th>
+          {/*
+            In flow, but zero height. `sr-only` would position this row absolutely, which takes
+            it out of the table model — and then `table-fixed` has no header row to take its
+            column widths from, which is exactly how the title column ends up at zero width.
+            Collapsing it with h-0/p-0 keeps the widths and the header names both.
+          */}
+          <thead>
+            <tr className="h-0">
+              <th scope="col" className="h-0 w-[var(--status-col-width)] p-0 max-md:w-32">
+                <span className="sr-only">Status</span>
+              </th>
+              <th scope="col" className="h-0 p-0">
+                <span className="sr-only">Title</span>
+              </th>
+              <th scope="col" className={cn("h-0 w-40 p-0", SECONDARY)}>
+                <span className="sr-only">Agent</span>
+              </th>
+              <th scope="col" className={cn("h-0 w-48 p-0", SECONDARY)}>
+                <span className="sr-only">Working directory</span>
+              </th>
+              <th scope="col" className={cn("h-0 w-24 p-0", SECONDARY)}>
+                <span className="sr-only">Time</span>
+              </th>
+              <th scope="col" className="h-0 w-52 p-0 max-md:w-14">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
 
           <TaskGroupBody
             label="Running"
             tasks={groups.running}
-            // The concurrency limit is learnable from the screen rather than from the README.
-            emptyNote="Nothing running right now."
+            // The concurrency limit is learnable from the screen rather than from the README,
+            // so a backlog that is not moving explains itself.
+            suffix={stats.data ? `of ${stats.data.maxConcurrent}` : undefined}
+            emptyNote={
+              stats.data
+                ? `Nothing running. Up to ${plural(stats.data.maxConcurrent, "task")} run at once.`
+                : "Nothing running."
+            }
             expandedId={expandedId}
             onToggle={setExpandedId}
             highlightId={highlightId}
@@ -186,6 +229,8 @@ export function TasksPage() {
 interface TaskGroupBodyProps {
   label: string;
   tasks: TaskView[];
+  /** Appended after the count, e.g. the concurrency limit on the Running group. */
+  suffix?: string;
   /** Shown instead of collapsing the group, so an empty Running section still teaches. */
   emptyNote: string;
   collapsible?: boolean;
@@ -202,6 +247,7 @@ interface TaskGroupBodyProps {
 function TaskGroupBody({
   label,
   tasks,
+  suffix,
   emptyNote,
   collapsible,
   open = true,
@@ -231,7 +277,7 @@ function TaskGroupBody({
               type="button"
               aria-expanded={open}
               onClick={() => onOpenChange?.(!open)}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm hover:text-fg"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm uppercase tracking-[var(--tracking-wide)] hover:text-fg"
             >
               <Chevron aria-hidden="true" className="size-3" />
               {label}
@@ -241,6 +287,7 @@ function TaskGroupBody({
             <span className="inline-flex items-center gap-1.5">
               {label}
               <span className="font-mono tabular-nums">{tasks.length}</span>
+              {suffix && <span className="font-normal normal-case tracking-normal">{suffix}</span>}
             </span>
           )}
         </th>
@@ -284,7 +331,8 @@ interface TaskRowProps {
 
 function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction, onHighlight }: TaskRowProps) {
   const badge = taskBadge(task);
-  const detail = taskDetail(task, queuedTotal);
+  const timing = taskTiming(task, queuedTotal);
+  const reason = taskReason(task);
   const row = useRef<HTMLTableRowElement>(null);
   const [message, setMessage] = useState<{ text: string; tone: "quiet" | "danger" } | null>(null);
 
@@ -343,71 +391,77 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
 
   return (
     <>
+      {/*
+        The row stays a row. Making the whole <tr> a role="button" would throw away the column
+        associations a screen reader needs, and the Cancel button inside it would be an
+        interactive descendant of a button, which is invalid. The disclosure is a real button
+        on the title instead: native keys, native focus, one honest aria-expanded.
+      */}
       <tr
         ref={row}
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key !== "Enter" && e.key !== " ") return;
-          if (e.target !== e.currentTarget) return; // A button inside the row owns its own keys.
-          e.preventDefault();
-          onToggle();
-        }}
         className={cn(
-          "h-[var(--task-row-height)] cursor-pointer border-b border-[var(--table-border)]",
+          "h-[var(--task-row-height)] border-b border-[var(--table-border)]",
           "transition-colors duration-[var(--duration-fast)] hover:bg-[var(--table-row-bg-hover)]",
           expanded && "bg-[var(--table-row-bg-selected)]",
           highlighted && "outline outline-2 -outline-offset-2 outline-[var(--color-accent)]",
         )}
       >
-        <td className="w-[var(--status-col-width)] py-[var(--table-cell-pad-y)] pl-6 pr-[var(--table-cell-pad-x)] align-middle">
+        <td className="py-[var(--table-cell-pad-y)] pl-6 pr-[var(--table-cell-pad-x)] align-middle">
           <StatusBadge status={badge.status} label={badge.label} title={badge.title} />
-          {detail && (
-            <span className="mt-0.5 block truncate text-2xs text-fg-muted" title={detail}>
-              {detail}
-            </span>
-          )}
+          {timing && <span className="mt-0.5 block truncate text-2xs text-fg-muted">{timing}</span>}
         </td>
 
-        <td className="max-w-0 px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
-          <span className="flex items-center gap-1.5">
+        <td className="px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={onToggle}
+            className="flex w-full cursor-pointer items-center gap-1.5 rounded-sm text-left"
+          >
             {expanded ? (
               <ChevronDown aria-hidden="true" className="size-3 shrink-0 text-fg-subtle" />
             ) : (
               <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-fg-subtle" />
             )}
-            <span className="truncate font-medium text-fg">{task.title}</span>
+            <span className="min-w-0 flex-1 truncate font-medium text-fg">{task.title}</span>
+          </button>
+          {/*
+            Why it failed, or what it is blocked on — where there is room to read it, and
+            deliberately *outside* the button: inside, it concatenates onto the accessible name
+            and a screen reader announces "Upgrade the test runner to v4the background session…".
+          */}
+          {reason && <span className="mt-0.5 block truncate pl-[1.125rem] text-2xs text-fg-muted">{reason}</span>}
+        </td>
+
+        <td className={cn("px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle", SECONDARY)}>
+          <span className="block truncate text-xs text-fg-muted max-md:hidden">{task.agent}</span>
+        </td>
+
+        <td className={cn("px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle", SECONDARY)}>
+          {/* The leaf directory is the part that identifies it; the whole path is the tooltip. */}
+          <span className="block truncate font-mono text-2xs text-fg-muted max-md:hidden" title={task.cwd}>
+            {pathTail(task.cwd)}
           </span>
         </td>
 
-        <td className="w-40 px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
-          <span className="block truncate text-xs text-fg-muted">{task.agent}</span>
-        </td>
-
-        <td className="max-w-0 px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] align-middle">
-          {/* Truncates from the left: the leaf directory is the part that identifies it. */}
-          <span dir="rtl" className="block truncate text-left font-mono text-2xs text-fg-muted" title={task.cwd}>
-            {task.cwd}
-          </span>
-        </td>
-
-        <td className="w-24 whitespace-nowrap px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] text-right align-middle">
+        <td
+          className={cn(
+            "whitespace-nowrap px-[var(--table-cell-pad-x)] py-[var(--table-cell-pad-y)] text-right align-middle",
+            SECONDARY,
+          )}
+        >
           <time dateTime={new Date(timestamp).toISOString()} title={new Date(timestamp).toLocaleString()} className="text-xs text-fg-muted">
             {relativeTime(timestamp)}
           </time>
         </td>
 
-        <td
-          className="w-56 py-[var(--table-cell-pad-y)] pl-[var(--table-cell-pad-x)] pr-6 text-right align-middle"
-          // Row actions, in the row. Cancel is never buried in a detail page.
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
+        {/* Row actions, in the row. Cancel is never buried in a detail page. */}
+        <td className="py-[var(--table-cell-pad-y)] pl-[var(--table-cell-pad-x)] pr-6 text-right align-middle">
           <span className="inline-flex items-center justify-end gap-1.5">
+            {/* Reordering is a desktop affordance: at 390px the select would cost the title
+                the width it needs, and the queue position is still readable in the row. */}
             {task.state === "queued" && (
-              <label className="inline-flex items-center gap-1">
+              <label className="inline-flex items-center gap-1 max-md:hidden">
                 <span className="sr-only">Priority for {task.title}</span>
                 <Select
                   value={String(task.priority > 0 ? 1 : task.priority < 0 ? -1 : 0)}
@@ -427,9 +481,9 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
             {!terminal && (
               <ConfirmDialog
                 trigger={
-                  <Button variant="ghost" size="sm" disabled={busy}>
+                  <Button variant="ghost" size="sm" disabled={busy} aria-label={`Cancel ${task.title}`}>
                     <X aria-hidden="true" />
-                    Cancel
+                    <span className="max-md:sr-only">Cancel</span>
                   </Button>
                 }
                 title={task.state === "queued" ? "Drop this task from the queue?" : "Stop this task?"}
@@ -446,9 +500,15 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
             )}
 
             {terminal && (
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => retry.mutate()}>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                aria-label={`Retry ${task.title}`}
+                onClick={() => retry.mutate()}
+              >
                 <RotateCw aria-hidden="true" />
-                Retry
+                <span className="max-md:sr-only">Retry</span>
               </Button>
             )}
           </span>
@@ -481,6 +541,7 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
 
 function TaskExpansion({ task }: { task: TaskView }) {
   const badge = taskBadge(task);
+  const reason = taskReason(task);
   return (
     <div className="flex flex-col gap-3 text-sm">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -506,7 +567,7 @@ function TaskExpansion({ task }: { task: TaskView }) {
         <section className="rounded-[var(--radius-md)] bg-[var(--notice-bg)] px-3 py-2">
           <p className="text-xs font-medium text-[var(--notice-fg)]">
             {badge.label}
-            {task.waiting.detail ? ` — ${task.waiting.detail}` : ""}
+            {reason ? ` — ${reason}` : ""}
           </p>
           {task.attachCommand && (
             <p className="mt-1 text-xs text-fg-muted">

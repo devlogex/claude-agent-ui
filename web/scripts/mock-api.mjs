@@ -135,6 +135,150 @@ const runs = [
   },
 ];
 
+/**
+ * Tasks covering every badge condition at once: running, running-and-waiting (both reasons),
+ * three queued so "3rd of 3" has something to count, and one of each terminal state. All
+ * synthetic — invented repos, invented ids, invented prompts.
+ */
+const task = (over) => ({
+  agent: "release-notes",
+  cwd: "/Users/sam/code/acme-web",
+  prompt: "Summarise what changed since the last tag and draft the release notes.",
+  permissionMode: "ask",
+  unattended: true,
+  priority: 0,
+  attempts: 1,
+  maxAttempts: 1,
+  runId: null,
+  sessionId: null,
+  scheduleId: null,
+  createdAt: now - 60 * 60_000,
+  startedAt: null,
+  finishedAt: null,
+  result: null,
+  error: null,
+  waiting: null,
+  queuePosition: null,
+  attachCommand: null,
+  ...over,
+});
+
+const tasks = [
+  task({
+    id: "t-91a2",
+    title: "Draft release notes for 0.4.0",
+    state: "running",
+    runId: "r-7f2a91",
+    sessionId: "s-7f2a91",
+    startedAt: now - 4 * 60_000,
+    attachCommand: "claude attach r-7f2a91",
+  }),
+  task({
+    id: "t-55a0",
+    title: "Audit the lockfile for reachable advisories",
+    agent: "dependency-audit",
+    cwd: "/Users/sam/code/acme-api",
+    prompt: "Read the lockfile and list only the advisories that actually reach the running app.",
+    state: "running",
+    runId: "r-55a0c2",
+    sessionId: "s-55a0c2",
+    startedAt: now - 11 * 60_000,
+    waiting: { reason: "permission", detail: "permission prompt", since: now - 6 * 60_000 },
+    attachCommand: "claude attach r-55a0c2",
+  }),
+  task({
+    id: "t-1c40",
+    title: "Bisect the flaky checkout spec",
+    agent: "flaky-test-triage",
+    cwd: "/Users/sam/code/acme-api",
+    prompt: "Re-run the failing spec until it fails, then bisect to the first bad commit.",
+    state: "queued",
+    priority: 1,
+    queuePosition: 1,
+    createdAt: now - 9 * 60_000,
+  }),
+  task({
+    id: "t-2d71",
+    title: "Regenerate the API client from the new schema",
+    cwd: "/Users/sam/code/acme-infra",
+    state: "queued",
+    queuePosition: 2,
+    createdAt: now - 7 * 60_000,
+  }),
+  task({
+    id: "t-3e08",
+    title: "Tidy the changelog headings",
+    agent: "changelog-sync",
+    state: "queued",
+    priority: -1,
+    queuePosition: 3,
+    createdAt: now - 5 * 60_000,
+  }),
+  task({
+    id: "t-4f19",
+    title: "Summarise yesterday's deploys",
+    state: "succeeded",
+    runId: "r-3c80bd",
+    sessionId: "s-3c80bd",
+    createdAt: now - 58 * 60_000,
+    startedAt: now - 52 * 60_000,
+    finishedAt: now - 38 * 60_000,
+    result: "Three deploys, all green. The 14:20 rollout carried the cache change and cut p95 by 60ms.",
+    attachCommand: "claude attach r-3c80bd",
+  }),
+  task({
+    id: "t-5a2b",
+    title: "Upgrade the test runner to v4",
+    agent: "dependency-audit",
+    cwd: "/Users/sam/code/acme-api",
+    state: "failed",
+    runId: "r-be14d7",
+    createdAt: now - 3 * 60 * 60_000 - 5 * 60_000,
+    startedAt: now - 3 * 60 * 60_000,
+    finishedAt: now - 3 * 60 * 60_000 + 90_000,
+    error: "the background session stopped before it reported a result",
+    attachCommand: "claude attach r-be14d7",
+  }),
+  task({
+    id: "t-6b3c",
+    title: "Rotate the staging database credentials",
+    cwd: "/Users/sam/code/acme-infra",
+    state: "blocked",
+    runId: "r-02ff65",
+    createdAt: now - 26 * 60 * 60_000 - 5 * 60_000,
+    startedAt: now - 26 * 60 * 60_000,
+    finishedAt: now - 26 * 60 * 60_000 + 120_000,
+    // Already stripped of the BLOCKED: sentinel, exactly as the server sends it.
+    result: "The staging vault token is not in this environment, so I cannot read the current credentials.",
+    attachCommand: "claude attach r-02ff65",
+  }),
+  task({
+    id: "t-7c4d",
+    title: "Backfill the search index",
+    state: "cancelled",
+    createdAt: now - 5 * 60 * 60_000 - 5 * 60_000,
+    startedAt: now - 5 * 60 * 60_000,
+    finishedAt: now - 5 * 60 * 60_000 + 30_000,
+  }),
+];
+
+const TRANSCRIPT = {
+  messages: [
+    { role: "user", text: "Summarise what changed since the last tag and draft the release notes.", at: now - 4 * 60_000 },
+    {
+      role: "assistant",
+      text: "Reading the commits since v0.3.2. There are 41, of which 12 are user-visible.",
+      at: now - 3 * 60_000,
+    },
+    {
+      role: "assistant",
+      text: "Draft:\n\n## 0.4.0\n\n- The task queue now survives a restart.\n- Schedules show the next fire time in plain English.\n- Fixed a crash when the transcript file was rotated mid-read.",
+      at: now - 90_000,
+    },
+  ],
+  truncated: false,
+};
+
 let nextEventId = 1;
 const clients = new Set();
 
@@ -187,6 +331,117 @@ createServer((req, res) => {
 
   if (url.pathname === "/api/agents") return json(res, 200, scenario === "empty" ? [] : AGENTS);
   if (url.pathname === "/api/runs") return json(res, 200, { runs: scenario === "empty" ? [] : runs });
+
+  if (url.pathname === "/api/config") {
+    return json(res, 200, {
+      defaultCwd: "/Users/sam/code/acme-web",
+      starterPrompt: "",
+      permissionMode: "ask",
+      templates: { agent: "", skill: "" },
+    });
+  }
+
+  const live = scenario === "empty" ? [] : tasks;
+
+  if (url.pathname === "/api/tasks/stats") {
+    // `waiting` is a subset of `running`, never a sibling — the bar must not add them.
+    return json(res, 200, {
+      queued: live.filter((t) => t.state === "queued").length,
+      running: live.filter((t) => t.state === "running").length,
+      waiting: live.filter((t) => t.waiting).length,
+      maxConcurrent: 2,
+    });
+  }
+
+  if (url.pathname === "/api/tasks" && req.method === "GET") {
+    return json(res, 200, {
+      tasks: live,
+      // `--scenario stale` is the only way to see the warning bar on demand.
+      warning: scenario === "stale" ? "claude agents --json --all exited with code 1" : null,
+    });
+  }
+
+  if (url.pathname === "/api/tasks" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const sent = JSON.parse(body || "{}");
+      const agent = AGENTS.find((a) => a.id === sent.agentId);
+      const created = task({
+        id: `t-${Math.random().toString(16).slice(2, 6)}`,
+        title: sent.title || (sent.prompt || "Untitled task").split("\n")[0].slice(0, 80),
+        agent: agent?.runName ?? "release-notes",
+        cwd: sent.cwd ?? "/Users/sam/code/acme-web",
+        prompt: sent.prompt ?? "",
+        permissionMode: sent.permissionMode ?? "ask",
+        unattended: sent.unattended ?? true,
+        priority: sent.priority ?? 0,
+        state: "queued",
+        createdAt: Date.now(),
+        queuePosition: live.filter((t) => t.state === "queued").length + 1,
+      });
+      tasks.push(created);
+      broadcast("task:created", { taskId: created.id });
+      json(res, 201, created);
+    });
+    return;
+  }
+
+  const taskMatch = /^\/api\/tasks\/([^/]+)(\/[a-z]+)?$/.exec(url.pathname);
+  if (taskMatch) {
+    const found = tasks.find((t) => t.id === taskMatch[1]);
+    if (!found) return json(res, 404, { error: "task not found" });
+    const action = taskMatch[2];
+
+    if (action === "/transcript") {
+      return json(res, 200, found.startedAt ? TRANSCRIPT : { messages: [], truncated: false });
+    }
+    if (action === "/cancel") {
+      if (found.state !== "queued" && found.state !== "running" && found.state !== "cancelled") {
+        return json(res, 409, { error: "that task already finished" });
+      }
+      found.state = "cancelled";
+      found.finishedAt = Date.now();
+      found.waiting = null;
+      found.queuePosition = null;
+      broadcast("task:updated", { taskId: found.id });
+      return json(res, 200, found);
+    }
+    if (action === "/retry") {
+      if (found.state === "queued" || found.state === "running") {
+        return json(res, 409, { error: "that task is still running" });
+      }
+      const clone = task({
+        ...found,
+        id: `t-${Math.random().toString(16).slice(2, 6)}`,
+        state: "queued",
+        createdAt: Date.now(),
+        startedAt: null,
+        finishedAt: null,
+        result: null,
+        error: null,
+        runId: null,
+        attachCommand: null,
+        queuePosition: tasks.filter((t) => t.state === "queued").length + 1,
+      });
+      tasks.push(clone);
+      broadcast("task:created", { taskId: clone.id });
+      return json(res, 201, clone);
+    }
+    if (req.method === "PATCH") {
+      if (found.state !== "queued") return json(res, 409, { error: "priority only applies while a task is queued" });
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const sent = JSON.parse(body || "{}");
+        if (typeof sent.priority === "number") found.priority = sent.priority;
+        if (typeof sent.title === "string") found.title = sent.title;
+        broadcast("task:updated", { taskId: found.id });
+        json(res, 200, found);
+      });
+      return;
+    }
+  }
 
   return json(res, 404, { error: "not found" });
 }).listen(port, "127.0.0.1", () => {

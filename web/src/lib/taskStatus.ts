@@ -59,28 +59,57 @@ export function taskBadge(task: TaskView): TaskBadge {
 }
 
 /**
- * The badge's second channel: the one extra fact that state implies.
+ * The badge's second channel: the short fact that state implies, sitting under the badge.
  *
  * Status is never only a hue and never only a word either — a queued row that cannot say how
  * far down the queue it is has told the operator nothing they came to find out.
+ *
+ * Deliberately short. It shares a fixed-width column with the badge, so anything that needs a
+ * sentence belongs in {@link taskReason} instead, which has the width for it.
  */
-export function taskDetail(task: TaskView, queuedTotal: number, now = Date.now()): string | null {
+export function taskTiming(task: TaskView, queuedTotal: number, now = Date.now()): string | null {
   switch (task.state) {
     case "queued":
       return task.queuePosition === null ? null : `${ordinal(task.queuePosition)} of ${queuedTotal}`;
     case "running":
       if (task.waiting) return `waiting ${relativeTime(task.waiting.since, now)}`;
       return task.startedAt === null ? null : `started ${relativeTime(task.startedAt, now)}`;
-    case "failed":
-      return firstLine(task.error);
-    case "blocked":
-      return firstLine(task.result);
     case "succeeded":
     case "cancelled":
+    case "failed":
+    case "blocked":
       return duration(task.startedAt, task.finishedAt);
     default:
       return null;
   }
+}
+
+/**
+ * The one line that says *why*, for the two states that owe the operator one.
+ *
+ * It rides under the title rather than under the badge because that is where the width is — a
+ * cause truncated to four words is the same dead end as no cause at all.
+ */
+export function taskReason(task: TaskView): string | null {
+  if (task.state === "failed") return firstLine(task.error);
+  if (task.state === "blocked") return firstLine(task.result);
+  // Only for the soft wait. For a permission prompt the label already says the whole thing, and
+  // echoing the CLI's "permission prompt" under it is the same sentence twice.
+  if (task.state === "running" && task.waiting?.reason === "other") return task.waiting.detail || null;
+  return null;
+}
+
+/**
+ * The tail of a path, for a column too narrow for the whole thing.
+ *
+ * Done in JS rather than with `dir="rtl"`: that CSS trick truncates from the correct end but
+ * reorders the bidirectional run, so `/Users/sam/code/acme-web` renders as `…ode/acme-web/`
+ * with the leading slash moved to the tail. The full path stays in the cell's `title`.
+ */
+export function pathTail(cwd: string, segments = 2): string {
+  const parts = cwd.split("/").filter(Boolean);
+  if (parts.length <= segments) return cwd;
+  return `…/${parts.slice(-segments).join("/")}`;
 }
 
 /** `1` → `"1st"`. Recognition over recall: "3rd of 7" reads, "position 3" has to be decoded. */
