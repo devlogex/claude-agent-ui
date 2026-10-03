@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Local editor / tooling state
+.omc/
+.claude/
+.DS_Store
+
+# Local runtime state lives in ~/.claude-agent-ui, never in the repo
+*.log
