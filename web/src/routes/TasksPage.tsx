@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, ListChecks, Plus, RotateCw, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
 import { NewTaskDialog } from "../components/NewTaskDialog.tsx";
@@ -42,6 +42,33 @@ import { cn, plural, relativeTime } from "../lib/utils.ts";
 const SECONDARY = "max-md:w-0 max-md:overflow-hidden max-md:p-0";
 
 /**
+ * How long an action's own sentence outranks the differ's summary of the same task.
+ *
+ * The two writers are describing the same event from different distances: the mutation's reply
+ * knows *why* ("finished before it could be stopped"), the differ only sees the row's label
+ * change. They land ~50ms apart — far inside the pause before a polite live region is spoken —
+ * so without a window the richer sentence is written and overwritten before it is ever read.
+ *
+ * Seconds, not milliseconds: the gap is one refetch, but an invalidation that queues behind a
+ * slow list request can take a while, and the cost of being generous is only that one later
+ * transition on that one task goes unannounced.
+ */
+const ACTION_PRECEDENCE_MS = 4_000;
+
+/**
+ * What the live region is currently saying, and enough about where it came from to arbitrate.
+ *
+ * `taskId` is the task an action was taken on, and is what makes the precedence rule narrow:
+ * null for anything the differ wrote, so the differ never yields to itself.
+ */
+interface Announcement {
+  text: string;
+  taskId: string | null;
+  /** `Date.now()` when it was set. `0` for the initial silence, which outranks nothing. */
+  at: number;
+}
+
+/**
  * The Tasks screen: every run the queue knows about, grouped by what it is doing.
  *
  * Not built on DataTable. That component is a flat, client-sorted list and this is neither —
@@ -61,7 +88,12 @@ export function TasksPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(true);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState<Announcement>({ text: "", taskId: null, at: 0 });
+
+  /** Everything a user action says about a task it just acted on, timestamped for precedence. */
+  const announceAction = useCallback((text: string, taskId: string) => {
+    setAnnouncement({ text, taskId, at: Date.now() });
+  }, []);
 
   const all = useMemo(() => tasks.data?.tasks ?? [], [tasks.data]);
   const groups = useMemo(
@@ -75,9 +107,22 @@ export function TasksPage() {
 
   const transition = useStateChanges(all);
   // One message at a time, so the live region reads a real transition rather than a queue of
-  // stale ones. Set by the differ, or overwritten by an action the user just took.
+  // stale ones — and when two writers describe the same event, the one that knows why wins.
+  //
+  // The differ stands down only for the exact task the user just acted on, and only for a few
+  // seconds. A transition on any *other* task, or a multi-task summary, still announces: being
+  // overwritten by a thinner sentence is a shame, but saying nothing at all is the worse bug.
   useEffect(() => {
-    if (transition) setAnnouncement(transition);
+    if (!transition) return;
+    const now = Date.now();
+    setAnnouncement((current) => {
+      const supersededByAction =
+        current.taskId !== null &&
+        transition.taskIds.length === 1 &&
+        transition.taskIds[0] === current.taskId &&
+        now - current.at < ACTION_PRECEDENCE_MS;
+      return supersededByAction ? current : { text: transition.text, taskId: null, at: now };
+    });
   }, [transition]);
 
   // The highlight is a ring, not a flash: it survives prefers-reduced-motion unchanged, and it
@@ -90,7 +135,7 @@ export function TasksPage() {
 
   function handleCreated(task: TaskView) {
     setHighlightId(task.id);
-    setAnnouncement(`Queued "${task.title}".`);
+    announceAction(`Queued "${task.title}".`, task.id);
   }
 
   return (
@@ -109,7 +154,7 @@ export function TasksPage() {
         focus from the Cancel button someone is tabbed into (ux-guidelines No. 118).
       */}
       <p role="status" aria-live="polite" className="sr-only">
-        {announcement}
+        {announcement.text}
       </p>
 
       {tasks.data?.warning && (
@@ -194,7 +239,7 @@ export function TasksPage() {
             onToggle={setExpandedId}
             highlightId={highlightId}
             queuedTotal={groups.queued.length}
-            onAction={setAnnouncement}
+            onAction={announceAction}
             onHighlight={setHighlightId}
           />
           <TaskGroupBody
@@ -205,7 +250,7 @@ export function TasksPage() {
             onToggle={setExpandedId}
             highlightId={highlightId}
             queuedTotal={groups.queued.length}
-            onAction={setAnnouncement}
+            onAction={announceAction}
             onHighlight={setHighlightId}
           />
           <TaskGroupBody
@@ -219,7 +264,7 @@ export function TasksPage() {
             onToggle={setExpandedId}
             highlightId={highlightId}
             queuedTotal={groups.queued.length}
-            onAction={setAnnouncement}
+            onAction={announceAction}
             onHighlight={setHighlightId}
           />
         </table>
@@ -246,7 +291,7 @@ interface TaskGroupBodyProps {
   onToggle: (id: string | null) => void;
   highlightId: string | null;
   queuedTotal: number;
-  onAction: (message: string) => void;
+  onAction: (message: string, taskId: string) => void;
   onHighlight: (id: string) => void;
 }
 
@@ -331,7 +376,7 @@ interface TaskRowProps {
   onToggle: () => void;
   highlighted: boolean;
   queuedTotal: number;
-  onAction: (message: string) => void;
+  onAction: (message: string, taskId: string) => void;
   onHighlight: (id: string) => void;
 }
 
@@ -368,7 +413,7 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
     // reads as a no-op. No row-local message here — the row unmounts as it changes group.
     onSuccess: (settled) => {
       setMessage(null);
-      onAction(cancelOutcome(settled, task.title));
+      onAction(cancelOutcome(settled, task.title), task.id);
       if (settled.state !== "cancelled") onHighlight(settled.id);
       invalidate();
     },
@@ -382,7 +427,7 @@ function TaskRow({ task, expanded, onToggle, highlighted, queuedTotal, onAction,
       // Retry clones: the clicked row keeps its history and a *new* queued row appears. Saying
       // so, and pointing at it, is the difference between a successful action and a no-op.
       onHighlight(created.id);
-      onAction(`Retried "${task.title}" as a new queued task.`);
+      onAction(`Retried "${task.title}" as a new queued task.`, task.id);
       invalidate();
     },
     onError: handleError,
@@ -627,16 +672,26 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 
 /* ---------------------------------------------------------------------------------------- */
 
+/** A transition the differ saw, and which tasks it was about, so a caller can arbitrate. */
+interface Transition {
+  text: string;
+  /** One id for a single change; every changed id for the multi-task summary. */
+  taskIds: string[];
+}
+
 /**
  * The one real state change since the last render, as a sentence.
  *
  * Keyed on the badge label rather than `state`, so entering `waiting` — which keeps
  * `state: "running"` — announces too. The server already dedupes its events per task, so a
  * ten-minute permission wait produces one announcement, not one per poll.
+ *
+ * A fresh object per transition rather than a bare string: two identical sentences in a row are
+ * two events, and the caller needs to see the second one to decide about it afresh.
  */
-function useStateChanges(tasks: TaskView[]): string {
+function useStateChanges(tasks: TaskView[]): Transition | null {
   const previous = useRef<Map<string, string> | null>(null);
-  const [message, setMessage] = useState("");
+  const [transition, setTransition] = useState<Transition | null>(null);
 
   useEffect(() => {
     const next = new Map(tasks.map((task) => [task.id, taskBadge(task).label]));
@@ -649,11 +704,15 @@ function useStateChanges(tasks: TaskView[]): string {
       return was !== undefined && was !== taskBadge(task).label;
     });
     if (changed.length === 1) {
-      setMessage(`${changed[0]!.title}: ${taskBadge(changed[0]!).label}.`);
+      const task = changed[0]!;
+      setTransition({ text: `${task.title}: ${taskBadge(task).label}.`, taskIds: [task.id] });
     } else if (changed.length > 1) {
-      setMessage(`${plural(changed.length, "task")} changed state.`);
+      setTransition({
+        text: `${plural(changed.length, "task")} changed state.`,
+        taskIds: changed.map((task) => task.id),
+      });
     }
   }, [tasks]);
 
-  return message;
+  return transition;
 }
