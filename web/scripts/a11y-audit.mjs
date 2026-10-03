@@ -7,14 +7,15 @@
  * and give it back, that no state is signalled by colour alone, and that reduced motion is
  * honoured. Those are properties of the DOM, so they can only be checked against a real one.
  *
- * Needs the dev server:
- *   npm run dev &
- *   node scripts/a11y-audit.mjs
+ * Needs the dev server (vite, not the real server — from the repo root):
+ *   npm run web:dev &
+ *   npm --prefix web run check:a11y
  *
  * The mock API is this script's own: it starts `mock-api.mjs` on the port vite proxies to, and
  * restarts it per scenario (section 5). So port 3000 must be free — a mock you started yourself
  * would make the empty/error section audit whatever scenario *that* one was launched with, which
- * is the hole this arrangement closes.
+ * is the hole this arrangement closes. A taken port is refused, not worked around: startMock()
+ * waits for its own child's ready line, so a squatter surfaces as that child's EADDRINUSE exit.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -44,43 +45,63 @@ async function stopMock() {
   if (!mock) return;
   const child = mock;
   mock = null;
+  // A child that is already gone — crashed, or killed by the port guard below — never emits
+  // `exit` again. Node emits it once, and a listener added afterwards simply never runs, so
+  // awaiting one here would wedge the audit on a corpse instead of ending it.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   const ended = new Promise((resolve) => child.once("exit", resolve));
   child.kill("SIGTERM");
-  await ended;
+  // And one that refuses SIGTERM must not wedge it either: this is teardown, nothing downstream
+  // depends on a graceful close, and the `process.on("exit")` SIGKILL is still the backstop.
+  await Promise.race([ended, new Promise((r) => setTimeout(r, 5_000).unref())]);
 }
 
 async function startMock(scenario) {
   await stopMock();
   const child = spawn(process.execPath, [MOCK_SCRIPT, "--port", String(MOCK_PORT), "--scenario", scenario], {
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
   child.stderr.on("data", (chunk) => (stderr += chunk));
-  let exit;
-  child.once("exit", (code) => (exit = code ?? 0));
 
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    if (exit !== undefined) {
-      throw new Error(
-        `mock API (--scenario ${scenario}) exited with ${exit} before it answered. Port ${MOCK_PORT} is ` +
-          `most likely already taken — this script starts its own mock, so stop yours and re-run.` +
-          (stderr.trim() ? `\n${stderr.trim()}` : ""),
+  // Wait for *this child's* ready line, not for an answer on the port. A mock the caller already
+  // started answers a probe exactly as well as ours does, and the audit would then run against
+  // whatever scenario that one was launched with — the hole section 5 exists to close. Waiting on
+  // the line means a taken port can only arrive here as the EADDRINUSE exit handled below.
+  await new Promise((resolve, reject) => {
+    let stdout = "";
+    const settle = (fn, arg) => {
+      clearTimeout(timer);
+      child.stdout.off("data", onData);
+      child.off("exit", onExit);
+      fn(arg);
+    };
+    const onData = (chunk) => {
+      stdout += chunk;
+      if (stdout.includes(`on http://127.0.0.1:${MOCK_PORT}`)) settle(resolve);
+    };
+    const onExit = (code, signal) =>
+      settle(
+        reject,
+        new Error(
+          `mock API (--scenario ${scenario}) exited with ${signal ?? code ?? 0} before it was ready. Port ` +
+            `${MOCK_PORT} is most likely already taken — this script starts its own mock, so stop yours ` +
+            `and re-run.` +
+            (stderr.trim() ? `\n${stderr.trim()}` : ""),
+        ),
       );
-    }
-    try {
-      // Any status proves it is listening; under `--scenario error` every /api/ route is a 500.
-      await fetch(`http://127.0.0.1:${MOCK_PORT}/api/agents`);
-      mock = child;
-      return;
-    } catch {
-      if (Date.now() > deadline) {
-        child.kill("SIGKILL");
-        throw new Error(`mock API (--scenario ${scenario}) did not answer on port ${MOCK_PORT} within 10s.`);
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      settle(reject, new Error(`mock API (--scenario ${scenario}) was not ready on port ${MOCK_PORT} within 10s.`));
+    }, 10_000);
+
+    child.stdout.on("data", onData);
+    child.once("exit", onExit);
+  });
+
+  // Keep draining stdout; a full pipe buffer would block the mock mid-request.
+  child.stdout.resume();
+  mock = child;
 }
 
 // A killed browser or a thrown finding must not leave the mock holding the port.
@@ -91,7 +112,9 @@ process.on("exit", () => mock?.kill("SIGKILL"));
 try {
   await fetch(base);
 } catch {
-  console.error(`Nothing is serving ${base}. Start the dev server first:\n\n  npm run dev\n`);
+  // `npm run web:dev`, never `npm run dev`: at the repo root that one is the real server, which
+  // defaults to port 3000 and would then be the squatter startMock() refuses to run against.
+  console.error(`Nothing is serving ${base}. Start the dev server first:\n\n  npm run web:dev\n`);
   process.exit(2);
 }
 
