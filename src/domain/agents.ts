@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { parseAgentFile } from "./frontmatter.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { enabledUserPlugins } from "./plugins.ts";
+import { READ_ONLY_PLUGIN, type Scope, type WritableScope, scopeRoots } from "./scopes.ts";
 
 export interface AgentInfo {
   id: string;
@@ -10,8 +12,13 @@ export interface AgentInfo {
   runName: string;
   description: string;
   model: string | null;
-  source: string;
+  /** Where the file lives: `user` (~/.claude), `project` (<cwd>/.claude) or `plugin`. */
+  scope: Scope;
+  /** The owning plugin's short name; null for user and project agents. */
+  plugin: string | null;
   editable: boolean;
+  /** Why the file cannot be edited, in a sentence; null when it can. */
+  readOnlyReason: string | null;
   valid: boolean;
   error: string | null;
   /** Absolute path; server-side only, never sent to the client. */
@@ -24,8 +31,8 @@ export function agentsDir(home: string): string {
   return path.join(home, ".claude", "agents");
 }
 
-export function agentId(source: string, filePath: string): string {
-  return createHash("sha1").update(`${source}\0${filePath}`).digest("hex").slice(0, 16);
+export function agentId(scope: string, filePath: string): string {
+  return createHash("sha1").update(`${scope}\0${filePath}`).digest("hex").slice(0, 16);
 }
 
 export function toPublic({ filePath: _omit, ...rest }: AgentInfo): PublicAgent {
@@ -58,16 +65,31 @@ async function listMarkdown(dir: string, recursive: boolean): Promise<string[]> 
   return files.sort();
 }
 
-async function readAgent(filePath: string, source: string, editable: boolean, runPrefix: string): Promise<AgentInfo> {
+interface Origin {
+  scope: Scope;
+  plugin: string | null;
+  editable: boolean;
+  /** Prefixed onto `runName`, so a plugin agent is addressed the way the CLI expects. */
+  runPrefix: string;
+}
+
+async function readAgent(filePath: string, origin: Origin): Promise<AgentInfo> {
   const fallbackName = path.basename(filePath, ".md");
-  const base = { id: agentId(source, filePath), source, editable, filePath };
+  const base = {
+    id: agentId(origin.scope, filePath),
+    scope: origin.scope,
+    plugin: origin.plugin,
+    editable: origin.editable,
+    readOnlyReason: origin.editable ? null : READ_ONLY_PLUGIN(origin.plugin ?? "its", "agent"),
+    filePath,
+  };
   try {
-    const { data } = parseAgentFile(await readFile(filePath, "utf8"));
+    const { data } = parseFrontmatter(await readFile(filePath, "utf8"));
     const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : fallbackName;
     return {
       ...base,
       name,
-      runName: runPrefix + name,
+      runName: origin.runPrefix + name,
       description: typeof data.description === "string" ? data.description : "",
       model: typeof data.model === "string" ? data.model : null,
       valid: true,
@@ -77,7 +99,7 @@ async function readAgent(filePath: string, source: string, editable: boolean, ru
     return {
       ...base,
       name: fallbackName,
-      runName: runPrefix + fallbackName,
+      runName: origin.runPrefix + fallbackName,
       description: "",
       model: null,
       valid: false,
@@ -86,44 +108,29 @@ async function readAgent(filePath: string, source: string, editable: boolean, ru
   }
 }
 
-async function readJson(file: string): Promise<any> {
-  try {
-    return JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    return null;
+const writable = (scope: WritableScope): Origin => ({ scope, plugin: null, editable: true, runPrefix: "" });
+
+/**
+ * Every agent definition reachable from `home`, plus `projectDir` when one is given.
+ *
+ * A file that fails to parse is still listed — with `valid: false` and the reason — because the
+ * whole point of the editor is to fix it. The project root is skipped when it is the user root.
+ */
+export async function discoverAgents(home: string, projectDir?: string): Promise<AgentInfo[]> {
+  const agents: AgentInfo[] = [];
+  for (const { scope, dir } of scopeRoots("agents", home, projectDir)) {
+    const files = await listMarkdown(dir, true);
+    agents.push(...(await Promise.all(files.map((f) => readAgent(f, writable(scope))))));
   }
-}
-
-interface PluginInstall {
-  plugin: string;
-  installPath: string;
-}
-
-/** Enabled, user-scope plugins from installed_plugins.json + settings.json enabledPlugins. */
-async function enabledUserPlugins(home: string): Promise<PluginInstall[]> {
-  const installed = await readJson(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-  const settings = await readJson(path.join(home, ".claude", "settings.json"));
-  const enabled: Record<string, boolean> = settings?.enabledPlugins ?? {};
-  const result: PluginInstall[] = [];
-  for (const [key, installs] of Object.entries<any>(installed?.plugins ?? {})) {
-    if (enabled[key] !== true || !Array.isArray(installs)) continue;
-    const userInstall = installs.find((i) => i?.scope === "user" && typeof i.installPath === "string");
-    if (userInstall) result.push({ plugin: key.split("@")[0], installPath: userInstall.installPath });
-  }
-  return result;
-}
-
-export async function discoverAgents(home: string): Promise<AgentInfo[]> {
-  const globalFiles = await listMarkdown(agentsDir(home), true);
-  const agents = await Promise.all(globalFiles.map((f) => readAgent(f, "global", true, "")));
 
   for (const { plugin, installPath } of await enabledUserPlugins(home)) {
     const files = await listMarkdown(path.join(installPath, "agents"), false);
-    agents.push(...(await Promise.all(files.map((f) => readAgent(f, `plugin:${plugin}`, false, `${plugin}:`)))));
+    const origin: Origin = { scope: "plugin", plugin, editable: false, runPrefix: `${plugin}:` };
+    agents.push(...(await Promise.all(files.map((f) => readAgent(f, origin)))));
   }
   return agents;
 }
 
-export async function findAgent(home: string, id: string): Promise<AgentInfo | undefined> {
-  return (await discoverAgents(home)).find((a) => a.id === id);
+export async function findAgent(home: string, id: string, projectDir?: string): Promise<AgentInfo | undefined> {
+  return (await discoverAgents(home, projectDir)).find((a) => a.id === id);
 }

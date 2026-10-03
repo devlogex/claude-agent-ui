@@ -7,8 +7,9 @@
  */
 
 /**
- * Event names are `<namespace>:<verb>`. The namespaces are `run`, `task` and `schedule`; clients
- * subscribe to the ones they care about and re-read the matching resource when one arrives.
+ * Event names are `<namespace>:<verb>`. The namespaces are `run`, `task`, `schedule`, `agent` and
+ * `skill`; clients subscribe to the ones they care about and re-read the matching resource when
+ * one arrives.
  */
 export const RUN_EVENTS = {
   started: "run:started",
@@ -28,6 +29,26 @@ export const TASK_EVENTS = {
   created: "task:created",
   updated: "task:updated",
   removed: "task:removed",
+} as const;
+
+/**
+ * Definition files changed on disk through this server, payload `{ id }`.
+ *
+ * These are not a filesystem watcher: an agent file edited in another editor produces no event,
+ * because watching every `.claude` tree recursively costs more than it is worth. The client
+ * re-reads on navigation, and these events cover the edits it made itself in another tab.
+ */
+export const AGENT_EVENTS = {
+  created: "agent:created",
+  updated: "agent:updated",
+  removed: "agent:removed",
+} as const;
+
+/** The skills equivalent of {@link AGENT_EVENTS}, with the same `{ id }` payload and caveat. */
+export const SKILL_EVENTS = {
+  created: "skill:created",
+  updated: "skill:updated",
+  removed: "skill:removed",
 } as const;
 
 export interface BusEvent<T = unknown> {

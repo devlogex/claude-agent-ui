@@ -1,19 +1,13 @@
-import { link, mkdir, realpath, rename } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { writeViaTemp } from "../store/jsonStore.ts";
-import { agentsDir, findAgent } from "./agents.ts";
-import { parseAgentFile } from "./frontmatter.ts";
+import { agentId, findAgent } from "./agents.ts";
+import { assertInsideRoots, createDefFile, removeDefPath, replaceDefFile } from "./defFile.ts";
+import { ValidationError } from "./errors.ts";
+import { checkDefinition } from "./frontmatter.ts";
+import { type WritableScope, isWritableScope, scopeRoots } from "./scopes.ts";
 
-export class ValidationError extends Error {
-  constructor(
-    message: string,
-    readonly status = 400,
-  ) {
-    super(message);
-  }
-}
-
-const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+export { ValidationError } from "./errors.ts";
+export type { FieldError } from "./errors.ts";
 
 export const NEW_AGENT_TEMPLATE = `---
 name: my-agent
@@ -24,57 +18,72 @@ model: sonnet
 You are ... (describe the agent's job, how it gathers its own context, and what it reports).
 `;
 
-export function validateAgentContent(content: string): { name: string } {
-  if (typeof content !== "string" || !content.trim()) throw new ValidationError("content is empty");
-  let data;
-  try {
-    ({ data } = parseAgentFile(content));
-  } catch (err) {
-    throw new ValidationError((err as Error).message);
-  }
-  if (typeof data.name !== "string" || !data.name) throw new ValidationError("frontmatter `name` is required");
-  if (!NAME_RE.test(data.name)) {
-    throw new ValidationError("`name` must match ^[a-z0-9][a-z0-9-]*$ (lowercase letters, digits, dashes)");
-  }
-  if (typeof data.description !== "string" || !data.description.trim()) {
-    throw new ValidationError("frontmatter `description` is required");
-  }
-  return { name: data.name };
+/** Throws a 400 carrying every bad field, so the editor can mark them rather than show one sentence. */
+export function validateAgentContent(content: unknown): { name: string } {
+  const { fields, name } = checkDefinition(content);
+  if (fields.length > 0) throw new ValidationError(fields.map((f) => f.message).join("; "), 400, fields);
+  return { name: name! };
 }
 
-/** Resolves `target` and refuses anything outside the global agents directory. */
-export function assertInsideAgentsDir(home: string, target: string): string {
-  const root = path.resolve(agentsDir(home));
-  const resolved = path.resolve(target);
-  if (!resolved.startsWith(root + path.sep)) throw new ValidationError("path is outside ~/.claude/agents", 403);
-  return resolved;
+/** The directories an agent may be written to, in listing order. */
+function writableRoots(home: string, projectDir?: string) {
+  return scopeRoots("agents", home, projectDir);
 }
 
-export async function createAgent(home: string, content: string): Promise<string> {
+function rootFor(home: string, scope: WritableScope, projectDir?: string): string {
+  const root = writableRoots(home, projectDir).find((r) => r.scope === scope);
+  if (!root) {
+    throw new ValidationError("there is no separate project directory: the project is your home directory", 400);
+  }
+  return root.dir;
+}
+
+/** Resolves `target` and refuses anything outside a `.claude/agents` directory. */
+export function assertInsideAgentsDir(home: string, target: string, projectDir?: string): string {
+  return assertInsideRoots(
+    writableRoots(home, projectDir).map((r) => r.dir),
+    target,
+    ".claude/agents",
+  );
+}
+
+export interface CreateAgentOptions {
+  projectDir?: string;
+  /** Which `.claude/agents` directory to write to. Defaults to the user one. */
+  scope?: unknown;
+}
+
+export async function createAgent(
+  home: string,
+  content: unknown,
+  opts: CreateAgentOptions = {},
+): Promise<{ id: string; file: string; scope: WritableScope }> {
   const { name } = validateAgentContent(content);
-  const dir = agentsDir(home);
+  const scope = opts.scope === undefined ? "user" : opts.scope;
+  if (!isWritableScope(scope)) throw new ValidationError('scope must be "user" or "project"', 400);
+  const dir = rootFor(home, scope, opts.projectDir);
   await mkdir(dir, { recursive: true });
-  const file = assertInsideAgentsDir(home, path.join(dir, `${name}.md`));
-  try {
-    // link() fails with EEXIST instead of replacing, so creation is atomic and never overwrites.
-    await writeViaTemp(file, content, (tmp) => link(tmp, file));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new ValidationError(`an agent file named ${name}.md already exists`, 409);
-    }
-    throw err;
-  }
-  return file;
+  const file = assertInsideAgentsDir(home, path.join(dir, `${name}.md`), opts.projectDir);
+  await createDefFile(file, content as string, `an agent file named ${name}.md already exists`);
+  return { id: agentId(scope, file), file, scope };
 }
 
-export async function updateAgent(home: string, id: string, content: string): Promise<string> {
-  const agent = await findAgent(home, id);
+async function editable(home: string, id: string, projectDir?: string) {
+  const agent = await findAgent(home, id, projectDir);
   if (!agent) throw new ValidationError("agent not found", 404);
-  if (!agent.editable) throw new ValidationError("plugin agents are read-only; use Copy to global", 403);
+  if (!agent.editable) throw new ValidationError(agent.readOnlyReason ?? "this agent is read-only", 403);
+  assertInsideAgentsDir(home, agent.filePath, projectDir);
+  return agent;
+}
+
+export async function updateAgent(home: string, id: string, content: unknown, projectDir?: string): Promise<string> {
+  const agent = await editable(home, id, projectDir);
   validateAgentContent(content);
-  assertInsideAgentsDir(home, agent.filePath);
-  // Write through symlinks so a linked agent keeps pointing at its real file.
-  const file = await realpath(agent.filePath);
-  await writeViaTemp(file, content, (tmp) => rename(tmp, file));
-  return file;
+  return replaceDefFile(agent.filePath, content as string);
+}
+
+export async function deleteAgent(home: string, id: string, projectDir?: string): Promise<string> {
+  const agent = await editable(home, id, projectDir);
+  await removeDefPath(agent.filePath);
+  return agent.filePath;
 }

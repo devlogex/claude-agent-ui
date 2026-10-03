@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { test } from "node:test";
+import { ClaudeCli } from "../src/claude/claudeCli.ts";
+import { AGENT_EVENTS, EventBus, SKILL_EVENTS, type BusEvent } from "../src/events.ts";
+import { createApp } from "../src/server.ts";
+import { agentMd, fixtureHome, fixtureProject, skillMd } from "./helpers.ts";
+
+interface Api {
+  (method: string, p: string, body?: unknown): Promise<{ status: number; body: any }>;
+}
+
+interface Ctx {
+  api: Api;
+  home: string;
+  project: string;
+  /** Every event the server emitted during the test, in order. */
+  events: BusEvent[];
+}
+
+/** Boots the real app over loopback with a fixture home and a separate project directory. */
+async function withApi(fn: (ctx: Ctx) => Promise<void>) {
+  const [home, project] = [await fixtureHome(), await fixtureProject()];
+  const bus = new EventBus();
+  const events: BusEvent[] = [];
+  bus.subscribe((e) => events.push(e));
+  const cli = new ClaudeCli(async () => ({ stdout: "[]", stderr: "" }));
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  server.on(
+    "request",
+    createApp({ home, cli, port, starterPrompt: "go", defaultCwd: project, dataDir: `${home}/.ui`, bus }),
+  );
+  const api: Api = async (method, p, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${p}`, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+  try {
+    await fn({ api, home, project, events });
+  } finally {
+    server.close();
+  }
+}
+
+const types = (events: BusEvent[]) => events.map((e) => e.type);
+
+test("GET /api/agents lists user, project and plugin agents with a scope each", async () => {
+  await withApi(async ({ api }) => {
+    const { status, body } = await api("GET", "/api/agents");
+    assert.equal(status, 200);
+    const byName = Object.fromEntries(body.map((a: any) => [a.runName, a]));
+    assert.deepEqual(Object.keys(byName).sort(), ["alpha", "beta", "broken", "deployer", "omc:executor"]);
+    assert.equal(byName.alpha.scope, "user");
+    assert.equal(byName.deployer.scope, "project");
+    assert.equal(byName["omc:executor"].scope, "plugin");
+    for (const agent of body) assert.equal("filePath" in agent, false);
+  });
+});
+
+test("GET /api/agents/:id returns the file and the skills the agent can reach", async () => {
+  await withApi(async ({ api }) => {
+    const alpha = (await api("GET", "/api/agents")).body.find((a: any) => a.runName === "alpha");
+    const { status, body } = await api("GET", `/api/agents/${alpha.id}`);
+    assert.equal(status, 200);
+    assert.match(body.content, /name: alpha/);
+    assert.equal(body.skillAccess.kind, "all");
+    assert.deepEqual(
+      body.skillAccess.skills.map((s: any) => s.ref).sort(),
+      ["broken-skill", "omc:ralph", "release", "writing"],
+    );
+    assert.equal((await api("GET", "/api/agents/nope")).status, 404);
+  });
+});
+
+test("an agent's `skills:` allowlist narrows the detail view and flags a typo", async () => {
+  await withApi(async ({ api }) => {
+    const content = agentMd("picky", "Picky agent", "skills:\n  - writing\n  - ghost\n");
+    const { body: created } = await api("POST", "/api/agents", { content });
+    const { body } = await api("GET", `/api/agents/${created.id}`);
+    assert.equal(body.skillAccess.kind, "allowlist");
+    assert.deepEqual(body.skillAccess.skills.map((s: any) => s.ref), ["writing"]);
+    assert.deepEqual(body.skillAccess.unknown, ["ghost"]);
+  });
+});
+
+test("agents: create, edit and delete round-trip over HTTP and emit events", async () => {
+  await withApi(async ({ api, home, events }) => {
+    const created = await api("POST", "/api/agents", { content: agentMd("fresh", "Fresh agent") });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.scope, "user");
+    const file = path.join(home, ".claude", "agents", "fresh.md");
+    assert.equal(await readFile(file, "utf8"), agentMd("fresh", "Fresh agent"));
+
+    const listed = (await api("GET", "/api/agents")).body.find((a: any) => a.id === created.body.id);
+    assert.equal(listed.description, "Fresh agent");
+
+    const edited = agentMd("fresh", "Edited agent");
+    assert.equal((await api("PUT", `/api/agents/${created.body.id}`, { content: edited })).status, 200);
+    assert.equal(await readFile(file, "utf8"), edited);
+
+    assert.equal((await api("DELETE", `/api/agents/${created.body.id}`)).status, 200);
+    assert.equal(
+      (await api("GET", "/api/agents")).body.some((a: any) => a.id === created.body.id),
+      false,
+    );
+    assert.deepEqual(types(events), [AGENT_EVENTS.created, AGENT_EVENTS.updated, AGENT_EVENTS.removed]);
+    assert.deepEqual(events[0].data, { id: created.body.id });
+  });
+});
+
+test("agents can be created in the project scope", async () => {
+  await withApi(async ({ api, project }) => {
+    const { status, body } = await api("POST", "/api/agents", { content: agentMd("shipper"), scope: "project" });
+    assert.equal(status, 201);
+    assert.equal(body.scope, "project");
+    assert.ok(await readFile(path.join(project, ".claude", "agents", "shipper.md"), "utf8"));
+    const listed = (await api("GET", "/api/agents")).body.find((a: any) => a.id === body.id);
+    assert.equal(listed.scope, "project");
+  });
+});
+
+test("bad frontmatter is a 400 naming the field, not an opaque one", async () => {
+  await withApi(async ({ api }) => {
+    const { status, body } = await api("POST", "/api/agents", { content: "---\nname: Bad_Name\n---\n" });
+    assert.equal(status, 400);
+    assert.deepEqual(
+      body.fields.map((f: any) => f.field).sort(),
+      ["description", "name"],
+    );
+    assert.match(body.fields.find((f: any) => f.field === "name").message, /\^\[a-z0-9\]/);
+    assert.ok(body.error, "there is still a plain message for anything that ignores `fields`");
+
+    const noFrontmatter = await api("POST", "/api/skills", { content: "just a body" });
+    assert.equal(noFrontmatter.status, 400);
+    assert.deepEqual(noFrontmatter.body.fields.map((f: any) => f.field), ["frontmatter"]);
+  });
+});
+
+test("the validate routes check a draft without writing it", async () => {
+  await withApi(async ({ api, home }) => {
+    const bad = await api("POST", "/api/agents/validate", { content: "---\nname: Nope!\ndescription: d\n---\n" });
+    assert.equal(bad.status, 200, "an invalid draft mid-edit is not a failed request");
+    assert.equal(bad.body.valid, false);
+    assert.deepEqual(bad.body.fields.map((f: any) => f.field), ["name"]);
+
+    const good = await api("POST", "/api/skills/validate", { content: skillMd("fine") });
+    assert.deepEqual(good.body, { valid: true, fields: [] });
+
+    // Nothing reached disk, and "validate" was not read as an id.
+    assert.deepEqual(
+      (await api("GET", "/api/agents")).body.map((a: any) => a.name).sort(),
+      ["alpha", "beta", "broken", "deployer", "executor"],
+    );
+    await assert.rejects(readFile(path.join(home, ".claude", "agents", "Nope!.md"), "utf8"));
+  });
+});
+
+test("GET /api/skills lists user, project and plugin skills; plugin ones say why they are locked", async () => {
+  await withApi(async ({ api }) => {
+    const { status, body } = await api("GET", "/api/skills");
+    assert.equal(status, 200);
+    assert.deepEqual(body.map((s: any) => s.ref).sort(), ["broken-skill", "omc:ralph", "release", "writing"]);
+    const ralph = body.find((s: any) => s.ref === "omc:ralph");
+    assert.equal(ralph.scope, "plugin");
+    assert.equal(ralph.editable, false);
+    assert.match(ralph.readOnlyReason, /belongs to the omc plugin/);
+    for (const skill of body) {
+      assert.equal("filePath" in skill, false);
+      assert.equal("dir" in skill, false);
+      assert.equal("body" in skill, false, "the list carries no bodies");
+    }
+  });
+});
+
+test("GET /api/skills/:id returns the file and the parsed body", async () => {
+  await withApi(async ({ api }) => {
+    const writing = (await api("GET", "/api/skills")).body.find((s: any) => s.ref === "writing");
+    const { status, body } = await api("GET", `/api/skills/${writing.id}`);
+    assert.equal(status, 200);
+    assert.equal(body.content, skillMd("writing", "Writes things"));
+    assert.equal(body.body, "\n# writing\n\nBody of writing.\n");
+    assert.equal((await api("GET", "/api/skills/nope")).status, 404);
+  });
+});
+
+test("skills: create, edit and delete round-trip over HTTP and emit events", async () => {
+  await withApi(async ({ api, home, events }) => {
+    const created = await api("POST", "/api/skills", { content: skillMd("summarise", "Summarises") });
+    assert.equal(created.status, 201);
+    const file = path.join(home, ".claude", "skills", "summarise", "SKILL.md");
+    assert.equal(await readFile(file, "utf8"), skillMd("summarise", "Summarises"));
+
+    const fetched = await api("GET", `/api/skills/${created.body.id}`);
+    assert.equal(fetched.body.description, "Summarises");
+
+    const edited = skillMd("summarise", "Summarises better");
+    assert.equal((await api("PUT", `/api/skills/${created.body.id}`, { content: edited })).status, 200);
+    assert.equal((await api("GET", `/api/skills/${created.body.id}`)).body.description, "Summarises better");
+
+    assert.equal((await api("DELETE", `/api/skills/${created.body.id}`)).status, 200);
+    assert.equal((await api("GET", `/api/skills/${created.body.id}`)).status, 404);
+    assert.deepEqual(types(events), [SKILL_EVENTS.created, SKILL_EVENTS.updated, SKILL_EVENTS.removed]);
+  });
+});
+
+test("a plugin skill cannot be edited or deleted, and the 403 explains why", async () => {
+  await withApi(async ({ api, events }) => {
+    const ralph = (await api("GET", "/api/skills")).body.find((s: any) => s.ref === "omc:ralph");
+    const put = await api("PUT", `/api/skills/${ralph.id}`, { content: skillMd("ralph") });
+    assert.equal(put.status, 403);
+    assert.match(put.body.error, /belongs to the omc plugin/);
+    const del = await api("DELETE", `/api/skills/${ralph.id}`);
+    assert.equal(del.status, 403);
+    assert.match(del.body.error, /belongs to the omc plugin/);
+    // A refused write must not look like a change to anyone listening.
+    assert.deepEqual(types(events), []);
+  });
+});
+
+test("a plugin agent cannot be edited or deleted either", async () => {
+  await withApi(async ({ api }) => {
+    const executor = (await api("GET", "/api/agents")).body.find((a: any) => a.scope === "plugin");
+    assert.equal((await api("PUT", `/api/agents/${executor.id}`, { content: agentMd("executor") })).status, 403);
+    assert.equal((await api("DELETE", `/api/agents/${executor.id}`)).status, 403);
+  });
+});
+
+test("/api/config carries both editor templates", async () => {
+  await withApi(async ({ api }) => {
+    const { body } = await api("GET", "/api/config");
+    assert.match(body.templates.agent, /^---\nname: my-agent/);
+    assert.match(body.templates.skill, /^---\nname: my-skill/);
+  });
+});

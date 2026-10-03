@@ -4,10 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCli, DEFAULT_PERMISSION_MODE, type PermissionMode } from "./claude/claudeCli.ts";
 import { discoverAgents, findAgent, toPublic } from "./domain/agents.ts";
-import { NEW_AGENT_TEMPLATE, ValidationError, createAgent, updateAgent } from "./domain/agentStore.ts";
+import { NEW_AGENT_TEMPLATE, createAgent, deleteAgent, updateAgent } from "./domain/agentStore.ts";
+import { ValidationError } from "./domain/errors.ts";
+import { checkDefinition, parseFrontmatter } from "./domain/frontmatter.ts";
 import { TaskError, TaskQueue } from "./domain/queue.ts";
 import { RunError, RunStore } from "./domain/runs.ts";
-import { EventBus } from "./events.ts";
+import { NEW_SKILL_TEMPLATE, createSkill, deleteSkill, updateSkill } from "./domain/skillStore.ts";
+import { discoverSkills, findSkill, readSkill, resolveAgentSkills, toPublicSkill } from "./domain/skills.ts";
+import { AGENT_EVENTS, EventBus, SKILL_EVENTS } from "./events.ts";
 import { streamEvents } from "./sse.ts";
 
 /** The only address this server ever binds. There is deliberately no option to change it. */
@@ -101,12 +105,18 @@ export function createApp(opts: AppOptions) {
     (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
       fn(req, res).catch(next);
 
+  // Agents and skills are discovered relative to this directory as well as to ~, which is what
+  // makes a definition "project" scope. It is one directory, not a per-request parameter: the
+  // server serves one project, the one it was started in.
+  const projectDir = opts.defaultCwd;
+
   app.get("/api/config", (_req, res) => {
     res.json({
       defaultCwd: opts.defaultCwd,
       starterPrompt: opts.starterPrompt,
       permissionMode,
       template: NEW_AGENT_TEMPLATE,
+      templates: { agent: NEW_AGENT_TEMPLATE, skill: NEW_SKILL_TEMPLATE },
     });
   });
 
@@ -118,35 +128,117 @@ export function createApp(opts: AppOptions) {
     res.on("close", () => streams.delete(close));
   });
 
+  /**
+   * Checks a draft without writing it, so the editor can mark a bad field while the user is
+   * still typing. Always 200: an invalid draft is a normal state mid-edit, not a failed request.
+   */
+  const validateRoute = (req: Request, res: Response) => {
+    const { fields } = checkDefinition(req.body?.content);
+    res.json({ valid: fields.length === 0, fields });
+  };
+
   app.get(
     "/api/agents",
     wrap(async (_req, res) => {
-      res.json((await discoverAgents(home)).map(toPublic));
+      res.json((await discoverAgents(home, projectDir)).map(toPublic));
     }),
   );
+
+  // Registered before "/api/agents/:id" so "validate" is never read as an agent id.
+  app.post("/api/agents/validate", validateRoute);
 
   app.get(
     "/api/agents/:id",
     wrap(async (req, res) => {
-      const agent = await findAgent(home, String(req.params.id));
+      const agent = await findAgent(home, String(req.params.id), projectDir);
       if (!agent) throw new ValidationError("agent not found", 404);
-      res.json({ ...toPublic(agent), content: await readFile(agent.filePath, "utf8") });
+      const content = await readFile(agent.filePath, "utf8");
+      // The frontmatter is re-parsed here rather than carried on every list entry: only the
+      // detail view needs `skills:`/`tools:`, and a failed parse is already reported as `error`.
+      let data: Record<string, unknown> = {};
+      try {
+        ({ data } = parseFrontmatter(content));
+      } catch {
+        // Left empty; resolveAgentSkills reports "cannot be resolved" off agent.valid.
+      }
+      const skills = await discoverSkills(home, projectDir);
+      res.json({ ...toPublic(agent), content, skillAccess: resolveAgentSkills(agent, skills, data) });
     }),
   );
 
   app.post(
     "/api/agents",
     wrap(async (req, res) => {
-      await createAgent(home, req.body?.content);
-      res.status(201).json({ ok: true });
+      const { id, scope } = await createAgent(home, req.body?.content, { projectDir, scope: req.body?.scope });
+      bus.emit(AGENT_EVENTS.created, { id });
+      res.status(201).json({ id, scope });
     }),
   );
 
   app.put(
     "/api/agents/:id",
     wrap(async (req, res) => {
-      await updateAgent(home, String(req.params.id), req.body?.content);
-      res.json({ ok: true });
+      const id = String(req.params.id);
+      await updateAgent(home, id, req.body?.content, projectDir);
+      bus.emit(AGENT_EVENTS.updated, { id });
+      res.json({ id });
+    }),
+  );
+
+  app.delete(
+    "/api/agents/:id",
+    wrap(async (req, res) => {
+      const id = String(req.params.id);
+      await deleteAgent(home, id, projectDir);
+      bus.emit(AGENT_EVENTS.removed, { id });
+      res.json({ id });
+    }),
+  );
+
+  app.get(
+    "/api/skills",
+    wrap(async (_req, res) => {
+      res.json((await discoverSkills(home, projectDir)).map(toPublicSkill));
+    }),
+  );
+
+  app.post("/api/skills/validate", validateRoute);
+
+  app.get(
+    "/api/skills/:id",
+    wrap(async (req, res) => {
+      const skill = await findSkill(home, String(req.params.id), projectDir);
+      if (!skill) throw new ValidationError("skill not found", 404);
+      res.json(await readSkill(skill));
+    }),
+  );
+
+  app.post(
+    "/api/skills",
+    wrap(async (req, res) => {
+      const { id, scope } = await createSkill(home, req.body?.content, { projectDir, scope: req.body?.scope });
+      bus.emit(SKILL_EVENTS.created, { id });
+      res.status(201).json({ id, scope });
+    }),
+  );
+
+  app.put(
+    "/api/skills/:id",
+    wrap(async (req, res) => {
+      const id = String(req.params.id);
+      await updateSkill(home, id, req.body?.content, projectDir);
+      bus.emit(SKILL_EVENTS.updated, { id });
+      res.json({ id });
+    }),
+  );
+
+  app.delete(
+    "/api/skills/:id",
+    wrap(async (req, res) => {
+      const id = String(req.params.id);
+      await deleteSkill(home, id, projectDir);
+      bus.emit(SKILL_EVENTS.removed, { id });
+      res.json({ id });
     }),
   );
 
@@ -161,7 +253,7 @@ export function createApp(opts: AppOptions) {
     "/api/runs",
     wrap(async (req, res) => {
       const agentId = String(req.body?.agentId ?? "");
-      const agent = await findAgent(home, agentId);
+      const agent = await findAgent(home, agentId, projectDir);
       if (!agent) throw new RunError("agent not found", 404);
       if (!agent.valid) throw new RunError("agent file has invalid frontmatter; fix it before running");
       const run = await runs.start(agent.runName, String(req.body?.cwd ?? ""), {
@@ -191,7 +283,7 @@ export function createApp(opts: AppOptions) {
   app.post(
     "/api/tasks",
     wrap(async (req, res) => {
-      const agent = await findAgent(home, String(req.body?.agentId ?? ""));
+      const agent = await findAgent(home, String(req.body?.agentId ?? ""), projectDir);
       if (!agent) throw new TaskError("agent not found", 404);
       if (!agent.valid) throw new TaskError("agent file has invalid frontmatter; fix it before running", 400);
       // Built field by field rather than spread: `scheduleId` belongs to the scheduler, and a
@@ -270,7 +362,10 @@ export function createApp(opts: AppOptions) {
         : ((err as any).status ?? (err as any).statusCode);
     const status = Number.isInteger(raw) && raw >= 400 && raw < 600 ? raw : 500;
     if (status === 500) console.error(err);
-    res.status(status).json({ error: err.message });
+    // `fields` turns a frontmatter 400 into something the editor can point at, so it rides along
+    // whenever there is one; every other error keeps the plain `{ error }` shape.
+    const fields = err instanceof ValidationError && err.fields.length > 0 ? err.fields : undefined;
+    res.status(status).json(fields ? { error: err.message, fields } : { error: err.message });
   });
 
   return app;

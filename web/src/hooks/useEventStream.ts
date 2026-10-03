@@ -20,6 +20,19 @@ const INVALIDATES: Record<string, readonly (readonly unknown[])[] | null> = {
   [SERVER_EVENTS.runStarted]: [queryKeys.runs, queryKeys.taskStats],
   [SERVER_EVENTS.runStopped]: [queryKeys.runs, queryKeys.taskStats],
   [SERVER_EVENTS.runRemoved]: [queryKeys.runs, queryKeys.taskStats],
+  // The whole `["tasks"]` prefix: the list, the stats and any open transcript all move when a
+  // task does, and React Query matches a key prefix.
+  [SERVER_EVENTS.taskCreated]: [queryKeys.tasks],
+  [SERVER_EVENTS.taskUpdated]: [queryKeys.tasks],
+  [SERVER_EVENTS.taskRemoved]: [queryKeys.tasks],
+  // A definition's own cache entry goes too: the detail pane holds the file contents, which an
+  // edit in another tab has just replaced.
+  [SERVER_EVENTS.agentCreated]: [queryKeys.agents],
+  [SERVER_EVENTS.agentUpdated]: [queryKeys.agents],
+  [SERVER_EVENTS.agentRemoved]: [queryKeys.agents],
+  [SERVER_EVENTS.skillCreated]: [queryKeys.skills],
+  [SERVER_EVENTS.skillUpdated]: [queryKeys.skills],
+  [SERVER_EVENTS.skillRemoved]: [queryKeys.skills],
   [SERVER_EVENTS.reset]: null,
 };
 

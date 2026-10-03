@@ -9,11 +9,32 @@
  * without a renderer, and so React Strict Mode's double-mount cannot open two sockets.
  */
 
-/** Event names the server emits. Mirrors RUN_EVENTS and RESET_EVENT in ../../src/events.ts / sse.ts. */
+/**
+ * Event names the server emits. Mirrors RUN_EVENTS, AGENT_EVENTS and SKILL_EVENTS in
+ * ../../src/events.ts, plus RESET_EVENT in ../../src/sse.ts.
+ *
+ * The `agent:*` and `skill:*` events cover edits made through this server — in another tab, or
+ * by a background task. A file changed in an external editor produces none; nothing watches the
+ * `.claude` trees.
+ */
 export const SERVER_EVENTS = {
   runStarted: "run:started",
   runStopped: "run:stopped",
   runRemoved: "run:removed",
+  /**
+   * The queue's notifications. `taskUpdated` covers every state transition, including entering
+   * and leaving `waiting`, and the server emits it only on an observed change — so a task parked
+   * on a permission prompt for ten minutes is one event, not one per poll.
+   */
+  taskCreated: "task:created",
+  taskUpdated: "task:updated",
+  taskRemoved: "task:removed",
+  agentCreated: "agent:created",
+  agentUpdated: "agent:updated",
+  agentRemoved: "agent:removed",
+  skillCreated: "skill:created",
+  skillUpdated: "skill:updated",
+  skillRemoved: "skill:removed",
   /**
    * The client fell further behind than the server's replay buffer remembers, so there is
    * nothing to replay. Everything must be re-read rather than patched.
