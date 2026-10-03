@@ -16,6 +16,20 @@ export const RUN_EVENTS = {
   removed: "run:removed",
 } as const;
 
+/**
+ * The task queue's notifications, payload `{ taskId }` and nothing else.
+ *
+ * `updated` covers every state transition, including entering and leaving `waiting`, and the
+ * watcher emits it only on an observed change — a task parked on a permission prompt for ten
+ * minutes produces one event, not one per poll. `removed` is the history cap pruning a record;
+ * a cancelled task keeps its row and reports `updated`.
+ */
+export const TASK_EVENTS = {
+  created: "task:created",
+  updated: "task:updated",
+  removed: "task:removed",
+} as const;
+
 export interface BusEvent<T = unknown> {
   /** Monotonic within one server process; used as the SSE `id:` field. */
   id: number;
