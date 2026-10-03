@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { JsonStore, writeFileAtomic } from "../src/store/jsonStore.ts";
+import { fileURLToPath } from "node:url";
+import { JsonStore, sweepTempFiles, writeFileAtomic } from "../src/store/jsonStore.ts";
 import { put, tempHome } from "./helpers.ts";
 
 const store = <T>(dir: string, empty: () => T, name = "state.json") => new JsonStore<T>(path.join(dir, name), empty);
@@ -81,4 +84,78 @@ test("two stores on the same file do not collide on their temp paths", async () 
     (await readdir(dir)).filter((f) => f.endsWith(".tmp")),
     [],
   );
+});
+
+const CRASH_WRITER = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "crashWriter.ts");
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * Spawns the crash-writer child and resolves once it has printed `line`.
+ *
+ * `exited` is attached at spawn time on purpose: a child that finishes its write before the test
+ * kills it emits `exit` first, and a listener added afterwards would wait for an event that has
+ * already been and gone.
+ */
+async function startWriter(
+  file: string,
+  mode: "staged" | "race",
+  line: string,
+): Promise<{ child: ChildProcess; exited: Promise<unknown> }> {
+  const child = spawn(process.execPath, ["--import", "tsx", CRASH_WRITER, file, mode], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const exited = once(child, "exit");
+  let seen = "";
+  await new Promise<void>((resolve, reject) => {
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => {
+      seen += chunk;
+      if (seen.includes(line)) resolve();
+    });
+    child.once("exit", () => reject(new Error(`writer exited before printing "${line}": ${seen}`)));
+    child.once("error", reject);
+  });
+  return { child, exited };
+}
+
+const OLD = { v: "old" };
+
+test("a kill between the temp write and the rename leaves the previous file intact", { timeout: 60_000 }, async () => {
+  const dir = await tempHome();
+  const file = path.join(dir, "runs.json");
+  await writeFile(file, JSON.stringify(OLD));
+
+  const { child, exited } = await startWriter(file, "staged", "staged");
+  child.kill("SIGKILL");
+  await exited;
+
+  // The new value never landed, and the old file is byte-for-byte what it was.
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")), OLD);
+  // The temp file it was killed on top of is an orphan; the next start sweeps it.
+  assert.equal(
+    (await readdir(dir)).filter((f) => f.endsWith(".tmp")).length,
+    1,
+    "expected the orphaned temp file to still be there",
+  );
+  assert.equal(await sweepTempFiles(dir), 1);
+  assert.deepEqual((await readdir(dir)).sort(), ["runs.json"], "the sweep must take the temp file and nothing else");
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")), OLD);
+});
+
+test("a kill at an arbitrary point in a write never leaves a half-written file", { timeout: 120_000 }, async () => {
+  for (const delay of [1, 10, 40]) {
+    const dir = await tempHome();
+    const file = path.join(dir, "runs.json");
+    await writeFile(file, JSON.stringify(OLD));
+
+    const { child, exited } = await startWriter(file, "race", "writing");
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    child.kill("SIGKILL");
+    await exited;
+
+    // Whenever the kill landed, a reader sees one whole value: the old one or the new one.
+    const saved = JSON.parse(await readFile(file, "utf8")) as { v: string };
+    assert.ok(saved.v === "old" || saved.v === "new", `unexpected value after a kill at ${delay}ms`);
+  }
 });

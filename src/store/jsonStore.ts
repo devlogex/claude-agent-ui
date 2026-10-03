@@ -1,10 +1,34 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 function tmpPathFor(file: string): string {
   // The random suffix keeps two processes (or two stores on one file) from sharing a temp path.
   return path.join(path.dirname(file), `.${path.basename(file)}.${randomBytes(6).toString("hex")}.tmp`);
+}
+
+/** Matches the temp names {@link tmpPathFor} produces, and nothing a user would have put there. */
+const TEMP_NAME = /^\..+\.[0-9a-f]{12}\.tmp$/;
+
+/**
+ * Deletes temp files orphaned by a process that died between writing one and renaming it.
+ * Only safe to call while holding the state-directory lock, since a temp file belonging to a
+ * running server is a write in flight. Returns how many were removed.
+ */
+export async function sweepTempFiles(dir: string): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw err;
+  }
+  let removed = 0;
+  for (const name of entries.filter((n) => TEMP_NAME.test(n))) {
+    await rm(path.join(dir, name), { force: true });
+    removed++;
+  }
+  return removed;
 }
 
 /**
