@@ -1,0 +1,127 @@
+import assert from "node:assert/strict";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { test } from "node:test";
+import { ClaudeCli } from "../src/claude/claudeCli.ts";
+import { createApp, loopbackGuard } from "../src/server.ts";
+import { fixtureHome } from "./helpers.ts";
+
+async function withServer(fn: (port: number) => Promise<void>) {
+  const home = await fixtureHome();
+  const cli = new ClaudeCli(async () => ({ stdout: "[]", stderr: "" }));
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  // The guard needs the real port, which is only known after listen().
+  const port = (server.address() as AddressInfo).port;
+  server.on("request", createApp({ home, cli, port, starterPrompt: "go", defaultCwd: home, dataDir: `${home}/.ui` }));
+  try {
+    await fn(port);
+  } finally {
+    server.close();
+  }
+}
+
+// fetch() forbids overriding Host, so use raw http requests.
+function request(
+  port: number,
+  opts: { method?: string; host?: string; origin?: string; body?: string; path?: string },
+) {
+  const headers: Record<string, string> = {
+    host: opts.host ?? `127.0.0.1:${port}`,
+    "content-type": "application/json",
+  };
+  if (opts.origin) headers.origin = opts.origin;
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, method: opts.method ?? "GET", path: opts.path ?? "/api/agents", headers },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve({ status: res.statusCode!, body }));
+      },
+    );
+    req.on("error", reject);
+    req.end(opts.body);
+  });
+}
+
+test("loopback host is allowed; foreign Host (DNS rebinding) is refused", async () => {
+  await withServer(async (port) => {
+    assert.equal((await request(port, {})).status, 200);
+    assert.equal((await request(port, { host: `localhost:${port}` })).status, 200);
+    assert.equal((await request(port, { host: `evil.example:${port}` })).status, 403);
+    assert.equal((await request(port, { host: `127.0.0.1.evil.example:${port}` })).status, 403);
+  });
+});
+
+// Node's http client always sends a Host header, so the missing-header case is checked directly.
+test("loopbackGuard refuses a missing Host and a loopback host on the wrong port", () => {
+  const guard = loopbackGuard(3000);
+  const call = (headers: Record<string, string>, method = "GET") => {
+    let status = 0;
+    let nexted = false;
+    const res = {
+      status(code: number) {
+        status = code;
+        return res;
+      },
+      json() {},
+    };
+    guard({ headers, method } as never, res as never, () => {
+      nexted = true;
+    });
+    return { status, nexted };
+  };
+  assert.deepEqual(call({}), { status: 403, nexted: false });
+  assert.deepEqual(call({ host: "127.0.0.1:3001" }), { status: 403, nexted: false });
+  assert.deepEqual(call({ host: "127.0.0.1:3000" }), { status: 0, nexted: true });
+  assert.deepEqual(call({ host: "localhost:3000" }), { status: 0, nexted: true });
+  // A GET is exempt from the Origin check; a POST from another origin is not.
+  assert.deepEqual(call({ host: "localhost:3000", origin: "http://evil.example" }), { status: 0, nexted: true });
+  assert.deepEqual(call({ host: "localhost:3000", origin: "http://evil.example" }, "POST"), {
+    status: 403,
+    nexted: false,
+  });
+});
+
+test("state-changing requests need a matching or absent Origin", async () => {
+  await withServer(async (port) => {
+    const body = JSON.stringify({ content: "x" });
+    assert.equal((await request(port, { method: "POST", origin: "http://evil.example", body })).status, 403);
+    // Same-origin and no-origin requests reach validation (400 for bad content), so the guard let them through.
+    assert.equal((await request(port, { method: "POST", origin: `http://127.0.0.1:${port}`, body })).status, 400);
+    assert.equal((await request(port, { method: "POST", body })).status, 400);
+  });
+});
+
+test("malformed JSON body is a 400, not a 500", async () => {
+  await withServer(async (port) => {
+    assert.equal((await request(port, { method: "POST", body: "{bad" })).status, 400);
+  });
+});
+
+test("the guard covers every route, including unknown ones", async () => {
+  await withServer(async (port) => {
+    for (const p of ["/api/config", "/api/runs", "/", "/nope"]) {
+      assert.equal((await request(port, { host: "evil.example", path: p })).status, 403, p);
+    }
+  });
+});
+
+test("/api/config reports the ask default and never leaks a file path", async () => {
+  await withServer(async (port) => {
+    const { status, body } = await request(port, { path: "/api/config" });
+    assert.equal(status, 200);
+    assert.equal(JSON.parse(body).permissionMode, "ask");
+  });
+});
+
+test("agent listings never include the server-side file path", async () => {
+  await withServer(async (port) => {
+    const { body } = await request(port, { path: "/api/agents" });
+    const agents = JSON.parse(body);
+    assert.ok(agents.length > 0);
+    for (const agent of agents) assert.equal("filePath" in agent, false);
+  });
+});
