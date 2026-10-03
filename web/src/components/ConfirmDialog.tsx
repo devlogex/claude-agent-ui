@@ -12,8 +12,14 @@ import { buttonVariants } from "./ui/button.tsx";
  */
 
 export interface ConfirmDialogProps {
-  /** The control that opens it. Focus returns here when the dialog closes. */
-  trigger: React.ReactNode;
+  /**
+   * The control that opens it. Focus returns here when the dialog closes.
+   *
+   * Optional, for the controlled case where the confirmation guards a change rather than a
+   * button — a switch that must not commit until the user has read what it does. Radix still
+   * returns focus to whatever was focused when it opened, which is that control.
+   */
+  trigger?: React.ReactNode;
   title: string;
   /** What will happen, concretely. Name the thing being destroyed. */
   description: React.ReactNode;
@@ -40,7 +46,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
-      <AlertDialog.Trigger asChild>{trigger}</AlertDialog.Trigger>
+      {trigger && <AlertDialog.Trigger asChild>{trigger}</AlertDialog.Trigger>}
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="overlay-scrim fixed inset-0 z-50 bg-[var(--overlay-scrim)]" />
         <AlertDialog.Content

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { CalendarClock, ListChecks, Sparkles } from "lucide-react";
+import { CalendarClock, Sparkles } from "lucide-react";
 import { useMemo } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell.tsx";
@@ -10,6 +10,8 @@ import { useTheme } from "./hooks/useTheme.ts";
 import { createQueryClient } from "./lib/queryClient.ts";
 import { AgentsPage } from "./routes/AgentsPage.tsx";
 import { PlaceholderPage } from "./routes/PlaceholderPage.tsx";
+import { TaskDetailPage } from "./routes/TaskDetailPage.tsx";
+import { TasksPage } from "./routes/TasksPage.tsx";
 
 export function App() {
   // One client for the lifetime of the app; recreating it on render would drop the cache.
@@ -34,17 +36,8 @@ export function App() {
                 />
               }
             />
-            <Route
-              path="/tasks"
-              element={
-                <PlaceholderPage
-                  title="Tasks"
-                  description="The work queue"
-                  icon={ListChecks}
-                  comingUp="The queue, the worker loop and the task list land in the next milestone. Until then the Queued counter in the status bar reads as unavailable rather than zero."
-                />
-              }
-            />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route
               path="/schedule"
               element={
