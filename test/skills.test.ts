@@ -90,6 +90,7 @@ const agent = (over: Partial<AgentInfo> = {}): AgentInfo => ({
   plugin: null,
   editable: true,
   readOnlyReason: null,
+  parses: true,
   valid: true,
   error: null,
   filePath: "/tmp/alpha.md",
@@ -132,7 +133,16 @@ test("a narrow `tools:` list without Skill means the agent reaches nothing", asy
 
 test("an agent whose own frontmatter is broken resolves to nothing, with the reason", async () => {
   const skills = await discoverSkills(await fixtureHome());
-  const access = resolveAgentSkills(agent({ valid: false }), skills, {});
+  const access = resolveAgentSkills(agent({ parses: false, valid: false }), skills, {});
   assert.equal(access.kind, "none");
   assert.match(access.reason, /does not parse/);
+});
+
+// An agent can be unrunnable (no `description`) and still declare perfectly readable `skills:`.
+// Keying the resolver on `valid` would make it claim the file "does not parse", which is a lie.
+test("an agent that parses but fails a field still resolves its allowlist", async () => {
+  const skills = await discoverSkills(await fixtureHome());
+  const access = resolveAgentSkills(agent({ parses: true, valid: false }), skills, { skills: ["writing"] });
+  assert.equal(access.kind, "allowlist");
+  assert.deepEqual(names(access.skills), ["writing"]);
 });

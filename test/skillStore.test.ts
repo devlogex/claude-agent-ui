@@ -15,7 +15,11 @@ import { fixtureHome, fixtureProject, skillMd, tempHome } from "./helpers.ts";
 const rejects = (p: Promise<unknown>, re: RegExp, status: number) =>
   assert.rejects(p, (err: any) => re.test(err.message) && err.status === status);
 
-const missing = (file: string) => access(file).then(() => false, () => true);
+const missing = (file: string) =>
+  access(file).then(
+    () => false,
+    () => true,
+  );
 
 test("create writes ~/.claude/skills/<name>/SKILL.md, creating the folders", async () => {
   const home = await tempHome();
@@ -76,18 +80,29 @@ test("a failed create leaves no empty directory behind", async () => {
 });
 
 test("validation: yaml, required fields, name pattern, with the field named", () => {
-  const err = (content: unknown) => {
+  const err = (content: unknown, opts?: { forNewPath: boolean }) => {
     try {
-      validateSkillContent(content);
+      validateSkillContent(content, opts);
     } catch (e: any) {
       return e;
     }
     throw new Error("expected a rejection");
   };
   assert.deepEqual(err("").fields, [{ field: "content", message: "the file is empty" }]);
-  assert.deepEqual(err("---\nname: [x\n---\n").fields.map((f: any) => f.field), ["frontmatter"]);
-  assert.deepEqual(err(skillMd("Bad_Name")).fields.map((f: any) => f.field), ["name"]);
-  assert.deepEqual(err("---\nname: ok\n---\n").fields.map((f: any) => f.field), ["description"]);
+  assert.deepEqual(
+    err("---\nname: [x\n---\n").fields.map((f: any) => f.field),
+    ["frontmatter"],
+  );
+  assert.deepEqual(
+    err("---\nname: ok\n---\n").fields.map((f: any) => f.field),
+    ["description"],
+  );
+  // The path-safe rule guards the directory `createSkill` is about to make, and only that.
+  assert.deepEqual(
+    err(skillMd("Bad_Name"), { forNewPath: true }).fields.map((f: any) => f.field),
+    ["name"],
+  );
+  assert.deepEqual(validateSkillContent(skillMd("Bad_Name")), { name: "Bad_Name" });
   assert.deepEqual(validateSkillContent(skillMd("ok-1")), { name: "ok-1" });
 });
 
@@ -105,7 +120,10 @@ test("update refuses a `name` that no longer matches the skill's directory", asy
   const writing = (await discoverSkills(home)).find((s) => s.ref === "writing")!;
   await assert.rejects(updateSkill(home, writing.id, skillMd("renamed")), (err: any) => {
     assert.equal(err.status, 400);
-    assert.deepEqual(err.fields.map((f: any) => f.field), ["name"]);
+    assert.deepEqual(
+      err.fields.map((f: any) => f.field),
+      ["name"],
+    );
     assert.match(err.message, /must stay "writing"/);
     return true;
   });

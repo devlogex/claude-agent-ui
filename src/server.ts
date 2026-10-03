@@ -43,6 +43,15 @@ export function loopbackGuard(port: PortSource) {
   };
 }
 
+/**
+ * Why a definition cannot be run, quoting the problem rather than saying "invalid frontmatter".
+ * Claude Code skips a file with a missing `description` just as surely as one with broken YAML,
+ * and a user told which key is wrong can fix it in one pass.
+ */
+function unrunnable(error: string | null): string {
+  return `agent file is not usable: ${error ?? "its frontmatter is invalid"}; fix it before running`;
+}
+
 export interface AppOptions {
   home: string;
   cli: ClaudeCli;
@@ -159,7 +168,7 @@ export function createApp(opts: AppOptions) {
       try {
         ({ data } = parseFrontmatter(content));
       } catch {
-        // Left empty; resolveAgentSkills reports "cannot be resolved" off agent.valid.
+        // Left empty; resolveAgentSkills reports "cannot be resolved" off agent.parses.
       }
       const skills = await discoverSkills(home, projectDir);
       res.json({ ...toPublic(agent), content, skillAccess: resolveAgentSkills(agent, skills, data) });
@@ -255,7 +264,7 @@ export function createApp(opts: AppOptions) {
       const agentId = String(req.body?.agentId ?? "");
       const agent = await findAgent(home, agentId, projectDir);
       if (!agent) throw new RunError("agent not found", 404);
-      if (!agent.valid) throw new RunError("agent file has invalid frontmatter; fix it before running");
+      if (!agent.valid) throw new RunError(unrunnable(agent.error));
       const run = await runs.start(agent.runName, String(req.body?.cwd ?? ""), {
         prompt: req.body?.prompt,
         unattended: req.body?.unattended,
@@ -285,7 +294,7 @@ export function createApp(opts: AppOptions) {
     wrap(async (req, res) => {
       const agent = await findAgent(home, String(req.body?.agentId ?? ""), projectDir);
       if (!agent) throw new TaskError("agent not found", 404);
-      if (!agent.valid) throw new TaskError("agent file has invalid frontmatter; fix it before running", 400);
+      if (!agent.valid) throw new TaskError(unrunnable(agent.error), 400);
       // Built field by field rather than spread: `scheduleId` belongs to the scheduler, and a
       // request body must never be able to claim a task was created by one.
       res.status(201).json(

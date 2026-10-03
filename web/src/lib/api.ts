@@ -94,8 +94,9 @@ export interface Agent {
   editable: boolean;
   /** Why the file cannot be edited, in a sentence to show the user; null when it can. */
   readOnlyReason: string | null;
-  /** False when the file's frontmatter does not parse; `error` says why. */
+  /** False when Claude Code would skip the file — bad frontmatter, or a missing required key. */
   valid: boolean;
+  /** Every problem behind `valid: false`, in one sentence to show the user; null when there are none. */
   error: string | null;
 }
 
@@ -126,7 +127,9 @@ export interface Skill {
   plugin: string | null;
   editable: boolean;
   readOnlyReason: string | null;
+  /** False when Claude Code would skip the skill — bad frontmatter, or a missing required key. */
   valid: boolean;
+  /** Every problem behind `valid: false`, in one sentence to show the user; null when there are none. */
   error: string | null;
   /** The skill's directory name. Claude Code expects it to match `name`, so edits may not rename. */
   dirName: string;

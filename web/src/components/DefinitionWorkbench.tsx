@@ -308,7 +308,7 @@ function ListRow({
         <span className="flex w-full items-center gap-2">
           <span className="truncate text-sm font-medium text-fg">{item.name}</span>
           {!item.valid && (
-            <FileWarning className="size-3.5 shrink-0 text-danger-fg" aria-label="Frontmatter does not parse" />
+            <FileWarning className="size-3.5 shrink-0 text-danger-fg" aria-label="Claude Code cannot load this file" />
           )}
           <ScopeBadge scope={item.scope} plugin={item.plugin} className="ml-auto" />
         </span>

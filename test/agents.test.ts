@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { discoverAgents, toPublic } from "../src/domain/agents.ts";
-import { fixtureHome, fixtureProject, tempHome } from "./helpers.ts";
+import { fixtureHome, fixtureProject, put, tempHome } from "./helpers.ts";
 
 test("lists user agents (recursive) and enabled user-scope plugin agents", async () => {
   const agents = await discoverAgents(await fixtureHome());
@@ -29,10 +29,7 @@ test("project agents are listed alongside user ones, with a project scope", asyn
   assert.equal(deployer.editable, true);
   assert.equal(deployer.filePath, path.join(project, ".claude", "agents", "deployer.md"));
   // The user ones are still there, and nothing was dropped.
-  assert.deepEqual(
-    agents.map((a) => a.runName).sort(),
-    ["alpha", "beta", "broken", "deployer", "omc:executor"],
-  );
+  assert.deepEqual(agents.map((a) => a.runName).sort(), ["alpha", "beta", "broken", "deployer", "omc:executor"]);
 });
 
 // Regression: defaultCwd is `~` out of the box, so without the dedupe every agent is listed twice.
@@ -40,13 +37,28 @@ test("a project that is the home directory does not double-list its agents", asy
   const home = await fixtureHome();
   const agents = await discoverAgents(home, home);
   assert.deepEqual(agents.map((a) => a.runName).sort(), ["alpha", "beta", "broken", "omc:executor"]);
-  assert.equal(agents.every((a) => a.scope !== "project"), true);
+  assert.equal(
+    agents.every((a) => a.scope !== "project"),
+    true,
+  );
 });
 
 test("invalid frontmatter is listed, not thrown", async () => {
   const broken = (await discoverAgents(await fixtureHome())).find((a) => a.runName === "broken")!;
+  assert.equal(broken.parses, false);
   assert.equal(broken.valid, false);
   assert.match(broken.error!, /invalid frontmatter/);
+});
+
+// `parses` and `valid` answer different questions: the first is "can its `skills:` list be read",
+// the second is "would Claude Code load it at all". A missing `description` separates them.
+test("a file that parses but fails a required field is listed as unusable, with the key named", async () => {
+  const home = await fixtureHome();
+  await put(path.join(home, ".claude", "agents", "nodesc.md"), "---\nname: nodesc\n---\n\nBody.\n");
+  const nodesc = (await discoverAgents(home)).find((a) => a.name === "nodesc")!;
+  assert.equal(nodesc.parses, true);
+  assert.equal(nodesc.valid, false);
+  assert.equal(nodesc.error, "`description` is required");
 });
 
 test("missing ~/.claude yields an empty list", async () => {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { checkDefinition, describeFields } from "./frontmatter.ts";
 import { enabledUserPlugins } from "./plugins.ts";
 import { READ_ONLY_PLUGIN, type Scope, type WritableScope, scopeRoots } from "./scopes.ts";
 
@@ -19,7 +19,11 @@ export interface AgentInfo {
   editable: boolean;
   /** Why the file cannot be edited, in a sentence; null when it can. */
   readOnlyReason: string | null;
+  /** The frontmatter block parsed, so `skills:`/`tools:` can be read — even if a field is wrong. */
+  parses: boolean;
+  /** Claude Code would load this file: it parses and its required fields are there. */
   valid: boolean;
+  /** Every problem `valid: false` stands for, in one sentence; null when there are none. */
   error: string | null;
   /** Absolute path; server-side only, never sent to the client. */
   filePath: string;
@@ -83,18 +87,9 @@ async function readAgent(filePath: string, origin: Origin): Promise<AgentInfo> {
     readOnlyReason: origin.editable ? null : READ_ONLY_PLUGIN(origin.plugin ?? "its", "agent"),
     filePath,
   };
+  let content: string;
   try {
-    const { data } = parseFrontmatter(await readFile(filePath, "utf8"));
-    const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : fallbackName;
-    return {
-      ...base,
-      name,
-      runName: origin.runPrefix + name,
-      description: typeof data.description === "string" ? data.description : "",
-      model: typeof data.model === "string" ? data.model : null,
-      valid: true,
-      error: null,
-    };
+    content = await readFile(filePath, "utf8");
   } catch (err) {
     return {
       ...base,
@@ -102,10 +97,26 @@ async function readAgent(filePath: string, origin: Origin): Promise<AgentInfo> {
       runName: origin.runPrefix + fallbackName,
       description: "",
       model: null,
+      parses: false,
       valid: false,
-      error: `invalid frontmatter: ${(err as Error).message}`,
+      error: `cannot be read: ${(err as Error).message}`,
     };
   }
+
+  // The file is checked the same way the editor checks a draft, so a definition the editor would
+  // refuse to save never lists as runnable. `forNewPath` is off: this file already has its path.
+  const { data, fields } = checkDefinition(content);
+  const name = typeof data?.name === "string" && data.name.trim() ? data.name.trim() : fallbackName;
+  return {
+    ...base,
+    name,
+    runName: origin.runPrefix + name,
+    description: typeof data?.description === "string" ? data.description : "",
+    model: typeof data?.model === "string" ? data.model : null,
+    parses: data !== undefined,
+    valid: fields.length === 0,
+    error: describeFields(fields),
+  };
 }
 
 const writable = (scope: WritableScope): Origin => ({ scope, plugin: null, editable: true, runPrefix: "" });

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentInfo } from "./agents.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { checkDefinition, describeFields, parseFrontmatter } from "./frontmatter.ts";
 import { enabledUserPlugins } from "./plugins.ts";
 import { READ_ONLY_PLUGIN, type Scope, type WritableScope, scopeRoots } from "./scopes.ts";
 
@@ -24,7 +24,11 @@ export interface SkillInfo {
   editable: boolean;
   /** Why the skill cannot be edited, in a sentence; null when it can. */
   readOnlyReason: string | null;
+  /** The frontmatter block parsed, so the body can be shown — even if a field is wrong. */
+  parses: boolean;
+  /** Claude Code would load this skill: it parses and its required fields are there. */
   valid: boolean;
+  /** Every problem `valid: false` stands for, in one sentence; null when there are none. */
   error: string | null;
   /** The skill's directory name, which Claude Code expects to match `name`. */
   dirName: string;
@@ -67,9 +71,18 @@ async function listSkillDirs(root: string): Promise<string[]> {
   for (const e of entries) {
     const dir = path.join(root, e.name);
     // Symlinked skill directories (a dotfiles repo, a checked-out skill pack) count as directories.
-    const isDir = e.isDirectory() || (e.isSymbolicLink() && (await stat(dir).then((st) => st.isDirectory(), () => false)));
+    const isDir =
+      e.isDirectory() ||
+      (e.isSymbolicLink() &&
+        (await stat(dir).then(
+          (st) => st.isDirectory(),
+          () => false,
+        )));
     if (!isDir) continue;
-    const ok = await stat(path.join(dir, SKILL_FILE)).then((st) => st.isFile(), () => false);
+    const ok = await stat(path.join(dir, SKILL_FILE)).then(
+      (st) => st.isFile(),
+      () => false,
+    );
     if (ok) dirs.push(dir);
   }
   return dirs.sort();
@@ -96,27 +109,34 @@ async function readSkillDir(dir: string, origin: Origin): Promise<SkillInfo> {
     dir,
     filePath,
   };
+  let content: string;
   try {
-    const { data } = parseFrontmatter(await readFile(filePath, "utf8"));
-    const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : dirName;
-    return {
-      ...base,
-      name,
-      ref: origin.refPrefix + name,
-      description: typeof data.description === "string" ? data.description : "",
-      valid: true,
-      error: null,
-    };
+    content = await readFile(filePath, "utf8");
   } catch (err) {
     return {
       ...base,
       name: dirName,
       ref: origin.refPrefix + dirName,
       description: "",
+      parses: false,
       valid: false,
-      error: `invalid frontmatter: ${(err as Error).message}`,
+      error: `cannot be read: ${(err as Error).message}`,
     };
   }
+
+  // Checked exactly as the editor checks a draft, so the list and the editor never disagree about
+  // whether a skill is usable. `forNewPath` is off: the directory already exists.
+  const { data, fields } = checkDefinition(content);
+  const name = typeof data?.name === "string" && data.name.trim() ? data.name.trim() : dirName;
+  return {
+    ...base,
+    name,
+    ref: origin.refPrefix + name,
+    description: typeof data?.description === "string" ? data.description : "",
+    parses: data !== undefined,
+    valid: fields.length === 0,
+    error: describeFields(fields),
+  };
 }
 
 const writable = (scope: WritableScope): Origin => ({ scope, plugin: null, editable: true, refPrefix: "" });
@@ -196,10 +216,21 @@ function asList(value: unknown): string[] | null {
  * reaches everything unless its `tools:` list is narrow enough to exclude the `Skill` tool. A file
  * that does not parse gets no access, because nothing in it can be trusted to say otherwise.
  */
-export function resolveAgentSkills(agent: AgentInfo, skills: SkillInfo[], frontmatter: Record<string, unknown>): AgentSkillAccess {
+export function resolveAgentSkills(
+  agent: AgentInfo,
+  skills: SkillInfo[],
+  frontmatter: Record<string, unknown>,
+): AgentSkillAccess {
   const published = skills.map(toPublicSkill);
-  if (!agent.valid) {
-    return { kind: "none", reason: "This agent's frontmatter does not parse, so its skills cannot be resolved.", skills: [], unknown: [] };
+  // Keyed on `parses`, not `valid`: a missing `description` makes an agent unrunnable but leaves
+  // its `skills:`/`tools:` lists perfectly readable, and the sentence below would then be a lie.
+  if (!agent.parses) {
+    return {
+      kind: "none",
+      reason: "This agent's frontmatter does not parse, so its skills cannot be resolved.",
+      skills: [],
+      unknown: [],
+    };
   }
 
   const allowed = asList(frontmatter.skills);
@@ -212,7 +243,12 @@ export function resolveAgentSkills(agent: AgentInfo, skills: SkillInfo[], frontm
       if (skill && !found.includes(skill)) found.push(skill);
       else if (!skill) unknown.push(ref);
     }
-    return { kind: "allowlist", reason: "This agent's frontmatter lists the skills it may use.", skills: found, unknown };
+    return {
+      kind: "allowlist",
+      reason: "This agent's frontmatter lists the skills it may use.",
+      skills: found,
+      unknown,
+    };
   }
 
   const tools = asList(frontmatter.tools);

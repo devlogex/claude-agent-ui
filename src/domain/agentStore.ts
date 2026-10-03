@@ -3,7 +3,7 @@ import path from "node:path";
 import { agentId, findAgent } from "./agents.ts";
 import { assertInsideRoots, createDefFile, removeDefPath, replaceDefFile } from "./defFile.ts";
 import { ValidationError } from "./errors.ts";
-import { checkDefinition } from "./frontmatter.ts";
+import { type CheckOptions, checkDefinition } from "./frontmatter.ts";
 import { type WritableScope, isWritableScope, scopeRoots } from "./scopes.ts";
 
 export { ValidationError } from "./errors.ts";
@@ -18,9 +18,14 @@ model: sonnet
 You are ... (describe the agent's job, how it gathers its own context, and what it reports).
 `;
 
-/** Throws a 400 carrying every bad field, so the editor can mark them rather than show one sentence. */
-export function validateAgentContent(content: unknown): { name: string } {
-  const { fields, name } = checkDefinition(content);
+/**
+ * Throws a 400 carrying every bad field, so the editor can mark them rather than show one sentence.
+ *
+ * `forNewPath` is set only by `createAgent`, which turns `name` into `<name>.md`. An update writes
+ * back over a path that already exists, so it holds the file to what Claude Code itself requires.
+ */
+export function validateAgentContent(content: unknown, opts: CheckOptions = {}): { name: string } {
+  const { fields, name } = checkDefinition(content, opts);
   if (fields.length > 0) throw new ValidationError(fields.map((f) => f.message).join("; "), 400, fields);
   return { name: name! };
 }
@@ -58,7 +63,7 @@ export async function createAgent(
   content: unknown,
   opts: CreateAgentOptions = {},
 ): Promise<{ id: string; file: string; scope: WritableScope }> {
-  const { name } = validateAgentContent(content);
+  const { name } = validateAgentContent(content, { forNewPath: true });
   const scope = opts.scope === undefined ? "user" : opts.scope;
   if (!isWritableScope(scope)) throw new ValidationError('scope must be "user" or "project"', 400);
   const dir = rootFor(home, scope, opts.projectDir);

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { ClaudeCli } from "../src/claude/claudeCli.ts";
 import { AGENT_EVENTS, EventBus, SKILL_EVENTS, type BusEvent } from "../src/events.ts";
 import { createApp } from "../src/server.ts";
-import { agentMd, fixtureHome, fixtureProject, skillMd } from "./helpers.ts";
+import { agentMd, fixtureHome, fixtureProject, put, skillMd } from "./helpers.ts";
 
 interface Api {
   (method: string, p: string, body?: unknown): Promise<{ status: number; body: any }>;
@@ -72,10 +72,12 @@ test("GET /api/agents/:id returns the file and the skills the agent can reach", 
     assert.equal(status, 200);
     assert.match(body.content, /name: alpha/);
     assert.equal(body.skillAccess.kind, "all");
-    assert.deepEqual(
-      body.skillAccess.skills.map((s: any) => s.ref).sort(),
-      ["broken-skill", "omc:ralph", "release", "writing"],
-    );
+    assert.deepEqual(body.skillAccess.skills.map((s: any) => s.ref).sort(), [
+      "broken-skill",
+      "omc:ralph",
+      "release",
+      "writing",
+    ]);
     assert.equal((await api("GET", "/api/agents/nope")).status, 404);
   });
 });
@@ -86,7 +88,10 @@ test("an agent's `skills:` allowlist narrows the detail view and flags a typo", 
     const { body: created } = await api("POST", "/api/agents", { content });
     const { body } = await api("GET", `/api/agents/${created.id}`);
     assert.equal(body.skillAccess.kind, "allowlist");
-    assert.deepEqual(body.skillAccess.skills.map((s: any) => s.ref), ["writing"]);
+    assert.deepEqual(
+      body.skillAccess.skills.map((s: any) => s.ref),
+      ["writing"],
+    );
     assert.deepEqual(body.skillAccess.unknown, ["ghost"]);
   });
 });
@@ -131,34 +136,72 @@ test("bad frontmatter is a 400 naming the field, not an opaque one", async () =>
   await withApi(async ({ api }) => {
     const { status, body } = await api("POST", "/api/agents", { content: "---\nname: Bad_Name\n---\n" });
     assert.equal(status, 400);
-    assert.deepEqual(
-      body.fields.map((f: any) => f.field).sort(),
-      ["description", "name"],
-    );
+    assert.deepEqual(body.fields.map((f: any) => f.field).sort(), ["description", "name"]);
     assert.match(body.fields.find((f: any) => f.field === "name").message, /\^\[a-z0-9\]/);
     assert.ok(body.error, "there is still a plain message for anything that ignores `fields`");
 
     const noFrontmatter = await api("POST", "/api/skills", { content: "just a body" });
     assert.equal(noFrontmatter.status, 400);
-    assert.deepEqual(noFrontmatter.body.fields.map((f: any) => f.field), ["frontmatter"]);
+    assert.deepEqual(
+      noFrontmatter.body.fields.map((f: any) => f.field),
+      ["frontmatter"],
+    );
+  });
+});
+
+/*
+ * T-11: `valid` used to mean only "the YAML parsed", so a definition the editor refuses to save
+ * could still be queued. The list, the editor and the run gates now answer the same question.
+ */
+test("a definition the editor would refuse to save is not runnable either", async () => {
+  await withApi(async ({ api, home }) => {
+    await put(path.join(home, ".claude", "agents", "nodesc.md"), "---\nname: nodesc\n---\n\nBody.\n");
+
+    const listed = (await api("GET", "/api/agents")).body.find((a: any) => a.name === "nodesc");
+    assert.equal(listed.valid, false);
+    assert.equal(listed.parses, true, "the frontmatter is fine; it is the missing key that is not");
+    assert.match(listed.error, /`description` is required/);
+
+    for (const route of ["/api/runs", "/api/tasks"]) {
+      const { status, body } = await api("POST", route, { agentId: listed.id, cwd: home, prompt: "go" });
+      assert.equal(status, 400, route);
+      assert.match(body.error, /`description` is required/, `${route} names the key, not "invalid frontmatter"`);
+    }
+
+    // And the inverse: a name this app would not have generated is still perfectly runnable.
+    await put(path.join(home, ".claude", "agents", "Code-Reviewer.md"), agentMd("Code-Reviewer", "Reviews"));
+    const fine = (await api("GET", "/api/agents")).body.find((a: any) => a.name === "Code-Reviewer");
+    assert.equal(fine.valid, true);
+    assert.equal((await api("POST", "/api/tasks", { agentId: fine.id, cwd: home, prompt: "go" })).status, 201);
   });
 });
 
 test("the validate routes check a draft without writing it", async () => {
   await withApi(async ({ api, home }) => {
-    const bad = await api("POST", "/api/agents/validate", { content: "---\nname: Nope!\ndescription: d\n---\n" });
+    const bad = await api("POST", "/api/agents/validate", { content: "---\nname: Nope!\n---\n" });
     assert.equal(bad.status, 200, "an invalid draft mid-edit is not a failed request");
     assert.equal(bad.body.valid, false);
-    assert.deepEqual(bad.body.fields.map((f: any) => f.field), ["name"]);
+    assert.deepEqual(
+      bad.body.fields.map((f: any) => f.field),
+      ["description"],
+    );
 
     const good = await api("POST", "/api/skills/validate", { content: skillMd("fine") });
     assert.deepEqual(good.body, { valid: true, fields: [] });
 
+    // The editor opens files it did not create. A name this app would not generate is not an
+    // error to show while someone edits that file — only the create route builds a path from it.
+    const existing = await api("POST", "/api/agents/validate", { content: agentMd("Code-Reviewer") });
+    assert.deepEqual(existing.body, { valid: true, fields: [] });
+
     // Nothing reached disk, and "validate" was not read as an id.
-    assert.deepEqual(
-      (await api("GET", "/api/agents")).body.map((a: any) => a.name).sort(),
-      ["alpha", "beta", "broken", "deployer", "executor"],
-    );
+    assert.deepEqual((await api("GET", "/api/agents")).body.map((a: any) => a.name).sort(), [
+      "alpha",
+      "beta",
+      "broken",
+      "deployer",
+      "executor",
+    ]);
     await assert.rejects(readFile(path.join(home, ".claude", "agents", "Nope!.md"), "utf8"));
   });
 });

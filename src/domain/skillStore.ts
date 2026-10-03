@@ -2,7 +2,7 @@ import { mkdir, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { assertInsideRoots, createDefFile, removeDefPath, replaceDefFile } from "./defFile.ts";
 import { ValidationError } from "./errors.ts";
-import { checkDefinition } from "./frontmatter.ts";
+import { type CheckOptions, checkDefinition } from "./frontmatter.ts";
 import { type WritableScope, isWritableScope, scopeRoots } from "./scopes.ts";
 import { SKILL_FILE, findSkill, skillId } from "./skills.ts";
 
@@ -16,9 +16,14 @@ description: What this skill does and when Claude should reach for it
 Describe the procedure step by step. Keep it short enough to read in one pass.
 `;
 
-/** Throws a 400 carrying every bad field, so the editor can mark them rather than show one sentence. */
-export function validateSkillContent(content: unknown): { name: string } {
-  const { fields, name } = checkDefinition(content);
+/**
+ * Throws a 400 carrying every bad field, so the editor can mark them rather than show one sentence.
+ *
+ * `forNewPath` is set only by `createSkill`, which turns `name` into the skill's directory. An
+ * edit is pinned to the existing directory by the `name === dirName` rule below instead.
+ */
+export function validateSkillContent(content: unknown, opts: CheckOptions = {}): { name: string } {
+  const { fields, name } = checkDefinition(content, opts);
   if (fields.length > 0) throw new ValidationError(fields.map((f) => f.message).join("; "), 400, fields);
   return { name: name! };
 }
@@ -62,7 +67,7 @@ export async function createSkill(
   content: unknown,
   opts: CreateSkillOptions = {},
 ): Promise<{ id: string; file: string; dir: string; scope: WritableScope }> {
-  const { name } = validateSkillContent(content);
+  const { name } = validateSkillContent(content, { forNewPath: true });
   const scope = opts.scope === undefined ? "user" : opts.scope;
   if (!isWritableScope(scope)) throw new ValidationError('scope must be "user" or "project"', 400);
   const dir = assertInsideSkillsDir(home, path.join(rootFor(home, scope, opts.projectDir), name), opts.projectDir);
