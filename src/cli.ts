@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import open from "open";
-import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
+import { ClaudeCli, TESTED_CLI_MAJOR, execRunner, parseCliVersion } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
 import type { TaskQueue } from "./domain/queue.ts";
 import type { Scheduler } from "./domain/schedules.ts";
@@ -64,17 +64,56 @@ export function checkNodeVersion(version: string = process.version, min = MIN_NO
   );
 }
 
-/** Returns an actionable sentence when the claude binary cannot be run, else null. */
-export async function checkClaudeBinary(bin: string): Promise<string | null> {
-  const ok = await new Promise<boolean>((resolve) => {
-    execFile(bin, ["--version"], { timeout: 15_000 }, (err) => resolve(!err));
-  });
-  if (ok) return null;
+export interface ClaudePreflight {
+  /** An actionable sentence when the binary cannot be run at all. Fatal: nothing would work. */
+  problem: string | null;
+  /** An actionable sentence when the CLI is a major version we have not tested. Not fatal. */
+  warning: string | null;
+}
+
+/**
+ * Returns the warning for a CLI major version this release was not built against, else null.
+ *
+ * Only the major, and only when we could read one: a minor bump is where the CLI adds things, and
+ * warning on every one of those would train people to ignore the line that matters.
+ */
+export function checkClaudeCliVersion(output: string, tested = TESTED_CLI_MAJOR): string | null {
+  const version = parseCliVersion(output);
+  if (!version) return null;
+  const major = Number(version.split(".")[0]);
+  if (major === tested) return null;
+  const advice =
+    major > tested
+      ? `Check for a newer claude-agent-ui (npm view claude-agent-ui version).`
+      : `Upgrade the CLI: npm i -g @anthropic-ai/claude-code`;
   return (
-    `Could not run the Claude Code CLI as "${bin}".\n` +
-    `Install it (npm i -g @anthropic-ai/claude-code) or point at it with --claude-bin <path>\n` +
-    `or CLAUDE_AGENT_UI_CLAUDE_BIN=<path>.`
+    `Warning: Claude Code CLI ${version} is a major version claude-agent-ui ${readVersion()} has not been tested against (it expects ${tested}.x).\n` +
+    `Starting anyway. If runs fail to start or sessions show the wrong state, that is the first thing to suspect.\n` +
+    advice
   );
+}
+
+/**
+ * Runs the claude binary once and reports both whether it works and whether it is a version we
+ * know. One spawn, because this is on the path between the user typing the command and the URL
+ * appearing, and a second `--version` would buy nothing.
+ */
+export async function checkClaudeBinary(bin: string): Promise<ClaudePreflight> {
+  const result = await new Promise<string | null>((resolve) => {
+    execFile(bin, ["--version"], { timeout: 15_000 }, (err, stdout, stderr) =>
+      resolve(err ? null : `${stdout}\n${stderr}`),
+    );
+  });
+  if (result === null) {
+    return {
+      problem:
+        `Could not run the Claude Code CLI as "${bin}".\n` +
+        `Install it (npm i -g @anthropic-ai/claude-code) or point at it with --claude-bin <path>\n` +
+        `or CLAUDE_AGENT_UI_CLAUDE_BIN=<path>.`,
+      warning: null,
+    };
+  }
+  return { problem: null, warning: checkClaudeCliVersion(result) };
 }
 
 /**
@@ -114,8 +153,11 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   if (nodeProblem) throw new ConfigError(nodeProblem);
 
   const config = loadConfig({ argv });
-  const claudeProblem = await checkClaudeBinary(config.claudeBin);
-  if (claudeProblem) throw new ConfigError(claudeProblem);
+  const claude = await checkClaudeBinary(config.claudeBin);
+  if (claude.problem) throw new ConfigError(claude.problem);
+  // A warning, not a refusal: an untested CLI is usually fine, and refusing to start would strand
+  // someone on the day the CLI bumps. It goes to stderr so it survives `claude-agent-ui > url.txt`.
+  if (claude.warning) process.stderr.write(`${claude.warning}\n`);
 
   // Taken before anything reads or writes the state directory, so two servers never interleave
   // their JSON writes. LockError already reads as a sentence, so it passes through as one.

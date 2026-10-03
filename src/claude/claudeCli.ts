@@ -37,6 +37,31 @@ export function execRunner(bin: string): CliRunner {
 }
 
 /**
+ * The major version of the Claude Code CLI this release was built and tested against.
+ *
+ * Every argument in `startBackground` and the JSON shape in `parseSessions` are a contract with
+ * that CLI, and a major bump is where a contract is allowed to break. Bump this deliberately,
+ * after running the suite against the new CLI — not because a warning was annoying.
+ */
+export const TESTED_CLI_MAJOR = 2;
+
+/**
+ * `2.1.288 (Claude Code)`, tolerant of a `v` prefix and a `-beta.1` suffix. The `v` is matched but
+ * left out of the capture, and the lookbehind keeps `1.2.3` out of the middle of `10.1.2.3`.
+ */
+const CLI_VERSION = /(?<![\w.])v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/;
+
+/**
+ * The version `claude --version` reports, or null when the output is not a shape we recognise.
+ *
+ * Null is not a failure: the binary ran, so it is far better to say nothing than to accuse a
+ * working install of being the wrong version because the banner was reworded.
+ */
+export function parseCliVersion(output: string): string | null {
+  return CLI_VERSION.exec(stripAnsi(output))?.[1] ?? null;
+}
+
+/**
  * How a run answers permission prompts.
  * `ask` is the default everywhere: the CLI's own prompting behaviour, no bypass flag.
  * `bypassPermissions` is a deliberate per-task opt-in and is the only mode that passes
