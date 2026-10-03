@@ -35,6 +35,7 @@ const AGENTS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    parses: true,
     valid: true,
     error: null,
   },
@@ -48,6 +49,7 @@ const AGENTS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    parses: true,
     valid: true,
     error: null,
   },
@@ -61,6 +63,7 @@ const AGENTS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    parses: true,
     valid: true,
     error: null,
   },
@@ -74,8 +77,27 @@ const AGENTS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    // The frontmatter parses; it is just missing a key Claude Code requires. `parses` and
+    // `valid` disagree here, which is the whole reason the two fields exist.
+    parses: true,
     valid: false,
-    error: "frontmatter is missing a `description` field",
+    error: "`description` is required",
+  },
+  {
+    // Two bad fields at once, because `error` joins them: the longest sentence a list row has
+    // to show without the clamp eating the second key's name.
+    id: "a6",
+    name: "-draft-helper",
+    runName: "-draft-helper",
+    description: "",
+    model: null,
+    scope: "user",
+    plugin: null,
+    editable: true,
+    readOnlyReason: null,
+    parses: true,
+    valid: false,
+    error: "`name` cannot start with `-`; `description` is required",
   },
   {
     id: "a5",
@@ -88,6 +110,7 @@ const AGENTS = [
     editable: false,
     readOnlyReason:
       "This agent belongs to the demo-pack plugin, which owns the file. Copy it to your user agents to make your own version.",
+    parses: true,
     valid: true,
     error: null,
   },
@@ -110,6 +133,7 @@ const SKILLS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    parses: true,
     valid: true,
     error: null,
   },
@@ -123,6 +147,7 @@ const SKILLS = [
     plugin: null,
     editable: true,
     readOnlyReason: null,
+    parses: true,
     valid: true,
     error: null,
   },
@@ -137,6 +162,7 @@ const SKILLS = [
     editable: false,
     readOnlyReason:
       "This skill belongs to the demo-pack plugin, which owns the file. Copy it to your user skills to make your own version.",
+    parses: true,
     valid: true,
     error: null,
   },
@@ -423,11 +449,15 @@ createServer((req, res) => {
       } else {
         const name = /^name:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
         const description = /^description:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
-        if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
-          fields.push({
-            field: "name",
-            message: "`name` must match ^[a-z0-9][a-z0-9-]*$ (lowercase letters, digits, dashes)",
-          });
+        // These are the loadability rules, not the path-safety one. `/validate` judges a file
+        // that already exists, and `NAME_RE` is only applied where a new path gets built from
+        // the name — so an existing `Code-Reviewer` must validate clean here.
+        if (!name) {
+          fields.push({ field: "name", message: "`name` is required" });
+        } else if (name.includes(":")) {
+          fields.push({ field: "name", message: "`name` cannot contain `:`, which is reserved for plugin names" });
+        } else if (name.startsWith("-")) {
+          fields.push({ field: "name", message: "`name` cannot start with `-`" });
         }
         if (!description) fields.push({ field: "description", message: "`description` is required" });
       }

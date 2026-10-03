@@ -61,6 +61,17 @@ test("a file that parses but fails a required field is listed as unusable, with 
   assert.equal(nodesc.error, "`description` is required");
 });
 
+// T-12: the rule has to guard the name we would actually run. `runName` is the trimmed one, so
+// a leading space used to carry `-dash` past the leading-`-` rule and into `claude --agent`.
+test("a name whose leading `-` hides behind a space is listed as unloadable", async () => {
+  const home = await fixtureHome();
+  await put(path.join(home, ".claude", "agents", "spacey.md"), '---\nname: " -dash"\ndescription: Dashes\n---\n');
+  const spacey = (await discoverAgents(home)).find((a) => a.name === "-dash")!;
+  assert.equal(spacey.runName, "-dash");
+  assert.equal(spacey.valid, false);
+  assert.equal(spacey.error, "`name` cannot start with `-`");
+});
+
 test("missing ~/.claude yields an empty list", async () => {
   assert.deepEqual(await discoverAgents(await tempHome()), []);
 });

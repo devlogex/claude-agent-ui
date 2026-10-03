@@ -84,8 +84,13 @@ function RunNowAction({ agent }: { agent: AgentDetail }) {
         onClick={() => setOpen(true)}
         disabled={!agent.valid}
         // A disabled button that does not say why is a dead end — the editor below is where
-        // the user fixes exactly this.
-        disabledReason="This agent's frontmatter does not parse. Fix the problems above and it can run."
+        // the user fixes exactly this. Quote the problem rather than naming a cause: `valid`
+        // means "Claude Code would load this", so an agent whose frontmatter parses perfectly
+        // is disabled here for a missing `description`, and a tooltip blaming the YAML would
+        // send the user to read the one part of the file that is already correct.
+        disabledReason={`Claude Code cannot load this agent: ${
+          agent.error ?? "its frontmatter is invalid"
+        }. Fix that above and it can run.`}
       >
         <Play aria-hidden="true" />
         Run now

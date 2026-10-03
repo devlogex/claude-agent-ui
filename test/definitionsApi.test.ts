@@ -189,6 +189,13 @@ test("the validate routes check a draft without writing it", async () => {
     const good = await api("POST", "/api/skills/validate", { content: skillMd("fine") });
     assert.deepEqual(good.body, { valid: true, fields: [] });
 
+    // T-12: a leading space must not carry a leading `-` past the rule that exists to stop it.
+    const spacey = await api("POST", "/api/agents/validate", { content: '---\nname: " -dash"\ndescription: D\n---\n' });
+    assert.deepEqual(spacey.body, {
+      valid: false,
+      fields: [{ field: "name", message: "`name` cannot start with `-`" }],
+    });
+
     // The editor opens files it did not create. A name this app would not generate is not an
     // error to show while someone edits that file — only the create route builds a path from it.
     const existing = await api("POST", "/api/agents/validate", { content: agentMd("Code-Reviewer") });

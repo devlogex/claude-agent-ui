@@ -59,6 +59,21 @@ test("validation: yaml and the fields Claude Code requires before it will load t
   assert.deepEqual(validateAgentContent(agentMd("ok-1")), { name: "ok-1" });
 });
 
+// T-12: the name we check has to be the name we hand to `claude --agent`. Checking the raw string
+// let `" -dash"` through the leading-`-` rule and then run as `-dash`.
+test("surrounding whitespace neither smuggles a name past a rule nor fails one", () => {
+  assert.throws(() => validateAgentContent(agentMd('" -dash"', "Dashes")), /cannot start with `-`/);
+  assert.throws(() => validateAgentContent(agentMd('" omc:executor"', "Scoped")), /cannot contain `:`/);
+  // The other half of the same rule: a trimmable name is a good name, not a 400.
+  assert.deepEqual(validateAgentContent(agentMd('"ok-1 "', "Fine"), { forNewPath: true }), { name: "ok-1" });
+});
+
+test("create builds the path from the trimmed name", async () => {
+  const home = await tempHome();
+  const { file } = await createAgent(home, agentMd('"spacey "', "Spacey"));
+  assert.equal(file, path.join(home, ".claude", "agents", "spacey.md"));
+});
+
 // The regression behind T-11: `Code-Reviewer` is a name Claude Code loads happily, so an agent
 // already on disk under it has to stay editable. NAME_RE is our rule for a path we are creating.
 test("the path-safe name rule applies to a new file only", () => {

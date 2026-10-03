@@ -57,6 +57,9 @@ export interface CheckOptions {
  * `:` reserved for plugin-scoped ids, and `description` has to say when to reach for the file.
  * `forNewPath` adds our own, stricter path-safety rule on top.
  *
+ * Every rule is applied to the trimmed `name`, which is also the one returned, so surrounding
+ * whitespace can neither smuggle a name past a rule nor fail one: `name: "ok-1 "` creates `ok-1`.
+ *
  * Never throws: it returns the problems so callers can turn them into either a structured 400 or
  * the live feedback the editor shows while the user is still typing.
  */
@@ -72,8 +75,13 @@ export function checkDefinition(content: unknown, opts: CheckOptions = {}): Chec
   }
 
   const fields: FieldError[] = [];
-  const { name, description } = parsed.data;
-  if (typeof name !== "string" || !name.trim()) {
+  const { description } = parsed.data;
+  // Trimmed first, then checked: the trimmed name is the one we export, store as `runName` and
+  // hand to `claude --agent`, so a rule tested against the raw string guards the wrong value —
+  // `name: " -dash"` would pass the leading-`-` rule and still run as `-dash`.
+  const raw = parsed.data.name;
+  const name = typeof raw === "string" ? raw.trim() : raw;
+  if (typeof name !== "string" || !name) {
     fields.push({ field: "name", message: "`name` is required" });
   } else if (name.includes(":")) {
     // Claude Code reserves `:` for plugin-scoped ids and refuses to load the file otherwise.
@@ -90,7 +98,7 @@ export function checkDefinition(content: unknown, opts: CheckOptions = {}): Chec
     fields.push({ field: "description", message: "`description` is required" });
   }
 
-  return { ...parsed, fields, name: fields.some((f) => f.field === "name") ? undefined : (name as string).trim() };
+  return { ...parsed, fields, name: fields.some((f) => f.field === "name") ? undefined : (name as string) };
 }
 
 /**
