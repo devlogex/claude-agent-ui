@@ -25,6 +25,16 @@ export default defineConfig({
         changeOrigin: true,
         // /api/events is an open stream; buffering it would defeat the point.
         ws: false,
+        // The server's loopbackGuard requires a state-changing request's Origin to match its
+        // Host, which is exactly the DNS-rebinding defence we want in production — and exactly
+        // what a dev proxy breaks, because `changeOrigin` rewrites Host to the API port while
+        // Origin still says 5174. Without this every POST/PUT/DELETE from `vite dev` is a 403.
+        // Nothing here loosens the server: the guard still compares the two headers.
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            if (proxyReq.getHeader("origin")) proxyReq.setHeader("origin", `http://127.0.0.1:${API_PORT}`);
+          });
+        },
       },
     },
   },

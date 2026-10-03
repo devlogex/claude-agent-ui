@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { CalendarClock, Sparkles } from "lucide-react";
+import { CalendarClock } from "lucide-react";
 import { useMemo } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell.tsx";
@@ -10,6 +10,7 @@ import { useTheme } from "./hooks/useTheme.ts";
 import { createQueryClient } from "./lib/queryClient.ts";
 import { AgentsPage } from "./routes/AgentsPage.tsx";
 import { PlaceholderPage } from "./routes/PlaceholderPage.tsx";
+import { SkillsPage } from "./routes/SkillsPage.tsx";
 import { TaskDetailPage } from "./routes/TaskDetailPage.tsx";
 import { TasksPage } from "./routes/TasksPage.tsx";
 
@@ -25,17 +26,7 @@ export function App() {
           <Route element={<AppShell />}>
             <Route index element={<Navigate to="/agents" replace />} />
             <Route path="/agents" element={<AgentsPage />} />
-            <Route
-              path="/skills"
-              element={
-                <PlaceholderPage
-                  title="Skills"
-                  description="Skills discovered on disk"
-                  icon={Sparkles}
-                  comingUp="Browsing and editing the skills in ~/.claude/skills lands alongside the Agents editor."
-                />
-              }
-            />
+            <Route path="/skills" element={<SkillsPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route

@@ -9,11 +9,23 @@ export class ApiError extends Error {
   /** `0` means the request never reached the server. */
   readonly status: number;
 
-  constructor(message: string, status: number, options?: ErrorOptions) {
+  /**
+   * Field-level problems the server sent alongside the message, for the definition routes.
+   * A save that loses a race to another editor still lands on the right field because of this.
+   */
+  readonly fields: FieldError[];
+
+  constructor(message: string, status: number, options?: ErrorOptions & { fields?: FieldError[] }) {
     super(message, options);
     this.name = "ApiError";
     this.status = status;
+    this.fields = options?.fields ?? [];
   }
+}
+
+/** Narrows an unknown thrown value, since React Query hands mutation errors back as `unknown`. */
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -28,11 +40,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError("Could not reach the claude-agent-ui server. Is it still running?", 0, { cause });
   }
   if (!res.ok) {
-    const message = await res
-      .json()
-      .then((body: { error?: string }) => body.error)
-      .catch(() => null);
-    throw new ApiError(message ?? `${res.status} ${res.statusText}`, res.status);
+    const body = await res.json().catch(() => null as { error?: string; fields?: FieldError[] } | null);
+    throw new ApiError(body?.error ?? `${res.status} ${res.statusText}`, res.status, {
+      fields: Array.isArray(body?.fields) ? body.fields : [],
+    });
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -257,6 +268,8 @@ export interface AppConfig {
   defaultCwd: string;
   starterPrompt: string;
   permissionMode: PermissionMode;
+  /** Starting content for a new definition, so "New agent" opens a file that already parses. */
+  templates: { agent: string; skill: string };
 }
 
 /** Query keys live in one place so an SSE handler and a screen cannot disagree about them. */

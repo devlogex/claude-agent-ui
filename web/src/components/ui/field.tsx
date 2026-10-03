@@ -86,11 +86,17 @@ export const RadioCard = React.forwardRef<HTMLInputElement, RadioCardProps>(func
     <div
       className={cn(
         "flex gap-2 rounded-[var(--field-radius)] border border-[var(--field-border)] p-3",
-        "has-[:checked]:border-accent has-[:checked]:bg-[var(--color-accent-quiet)]",
+        "has-[:checked]:border-[var(--choice-border-selected)] has-[:checked]:bg-[var(--choice-bg-selected)]",
         className,
       )}
     >
-      <input ref={ref} id={id} type="radio" className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-accent)]" {...props} />
+      <input
+        ref={ref}
+        id={id}
+        type="radio"
+        className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-accent)]"
+        {...props}
+      />
       <label htmlFor={id} className="min-w-0 cursor-pointer select-none">
         <span className="block text-sm font-medium text-fg">{label}</span>
         <span className="mt-0.5 block text-xs leading-normal text-fg-muted">{description}</span>
@@ -102,7 +108,11 @@ export const RadioCard = React.forwardRef<HTMLInputElement, RadioCardProps>(func
 export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(
   function Select({ className, children, ...props }, ref) {
     return (
-      <select ref={ref} className={cn(controlClass, "h-[var(--button-height-md)] cursor-pointer", className)} {...props}>
+      <select
+        ref={ref}
+        className={cn(controlClass, "h-[var(--button-height-md)] cursor-pointer", className)}
+        {...props}
+      >
         {children}
       </select>
     );

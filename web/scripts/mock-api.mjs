@@ -31,8 +31,10 @@ const AGENTS = [
     runName: "release-notes",
     description: "Drafts release notes from the commits since the last tag.",
     model: "claude-opus-5",
-    source: "project",
+    scope: "project",
+    plugin: null,
     editable: true,
+    readOnlyReason: null,
     valid: true,
     error: null,
   },
@@ -42,8 +44,10 @@ const AGENTS = [
     runName: "flaky-test-triage",
     description: "Re-runs a failing spec, bisects it and reports the first bad commit.",
     model: "claude-sonnet-5",
-    source: "user",
+    scope: "user",
+    plugin: null,
     editable: true,
+    readOnlyReason: null,
     valid: true,
     error: null,
   },
@@ -53,8 +57,10 @@ const AGENTS = [
     runName: "dependency-audit",
     description: "Reads the lockfile and summarises advisories that actually reach the app.",
     model: null,
-    source: "user",
+    scope: "user",
+    plugin: null,
     editable: true,
+    readOnlyReason: null,
     valid: true,
     error: null,
   },
@@ -64,12 +70,80 @@ const AGENTS = [
     runName: "changelog-sync",
     description: "",
     model: null,
-    source: "project",
+    scope: "project",
+    plugin: null,
     editable: true,
+    readOnlyReason: null,
     valid: false,
     error: "frontmatter is missing a `description` field",
   },
+  {
+    id: "a5",
+    name: "oncall-summary",
+    runName: "demo-pack:oncall-summary",
+    description: "Summarises the week's pages and what was learned from each.",
+    model: null,
+    scope: "plugin",
+    plugin: "demo-pack",
+    editable: false,
+    readOnlyReason:
+      "This agent belongs to the demo-pack plugin, which owns the file. Copy it to your user agents to make your own version.",
+    valid: true,
+    error: null,
+  },
 ];
+
+/**
+ * Skills, in the same three scopes. The mock serves the list and the detail so the Skills screen
+ * can be looked at; it deliberately does not implement create/update/delete, because a write path
+ * that only pretends to write is worse than no write path. Exercise those against a real server
+ * started with a throwaway HOME — see scripts/shoot-definitions.mjs.
+ */
+const SKILLS = [
+  {
+    id: "k1",
+    name: "writing-style",
+    ref: "writing-style",
+    dirName: "writing-style",
+    description: "House style for prose that ships — short sentences, no filler, active voice.",
+    scope: "user",
+    plugin: null,
+    editable: true,
+    readOnlyReason: null,
+    valid: true,
+    error: null,
+  },
+  {
+    id: "k2",
+    name: "deploy-checklist",
+    ref: "deploy-checklist",
+    dirName: "deploy-checklist",
+    description: "The pre-deploy checks this project runs before a release goes out.",
+    scope: "project",
+    plugin: null,
+    editable: true,
+    readOnlyReason: null,
+    valid: true,
+    error: null,
+  },
+  {
+    id: "k3",
+    name: "incident-drill",
+    ref: "demo-pack:incident-drill",
+    dirName: "incident-drill",
+    description: "Walks an on-call engineer through a practice incident, step by step.",
+    scope: "plugin",
+    plugin: "demo-pack",
+    editable: false,
+    readOnlyReason:
+      "This skill belongs to the demo-pack plugin, which owns the file. Copy it to your user skills to make your own version.",
+    valid: true,
+    error: null,
+  },
+];
+
+const fileFor = (d) =>
+  `---\nname: ${d.name}\ndescription: ${d.description}\n---\n\n# ${d.name}\n\nSynthetic fixture content.\n`;
 
 const now = Date.now();
 const runs = [
@@ -264,7 +338,11 @@ const tasks = [
 
 const TRANSCRIPT = {
   messages: [
-    { role: "user", text: "Summarise what changed since the last tag and draft the release notes.", at: now - 4 * 60_000 },
+    {
+      role: "user",
+      text: "Summarise what changed since the last tag and draft the release notes.",
+      at: now - 4 * 60_000,
+    },
     {
       role: "assistant",
       text: "Reading the commits since v0.3.2. There are 41, of which 12 are user-visible.",
@@ -330,6 +408,50 @@ createServer((req, res) => {
   }
 
   if (url.pathname === "/api/agents") return json(res, 200, scenario === "empty" ? [] : AGENTS);
+  if (url.pathname === "/api/skills") return json(res, 200, scenario === "empty" ? [] : SKILLS);
+
+  // Always 200, like the real route: an invalid draft mid-edit is a normal state. The mock
+  // judges only the two rules the editor shows inline.
+  if (url.pathname === "/api/agents/validate" || url.pathname === "/api/skills/validate") {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      const content = String(JSON.parse(raw || "{}")?.content ?? "");
+      const fields = [];
+      if (!content.startsWith("---")) {
+        fields.push({ field: "frontmatter", message: "missing frontmatter (file must start with a --- block)" });
+      } else {
+        const name = /^name:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
+        const description = /^description:[ \t]*(.*)$/m.exec(content)?.[1]?.trim() ?? "";
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+          fields.push({
+            field: "name",
+            message: "`name` must match ^[a-z0-9][a-z0-9-]*$ (lowercase letters, digits, dashes)",
+          });
+        }
+        if (!description) fields.push({ field: "description", message: "`description` is required" });
+      }
+      json(res, 200, { valid: fields.length === 0, fields });
+    });
+    return;
+  }
+
+  const agent = AGENTS.find((a) => url.pathname === `/api/agents/${a.id}`);
+  if (agent) {
+    return json(res, 200, {
+      ...agent,
+      content: fileFor(agent),
+      skillAccess: {
+        kind: "all",
+        reason: "This agent can use every skill installed here.",
+        skills: SKILLS,
+        unknown: [],
+      },
+    });
+  }
+
+  const skill = SKILLS.find((k) => url.pathname === `/api/skills/${k.id}`);
+  if (skill) return json(res, 200, { ...skill, content: fileFor(skill), body: `# ${skill.name}\n` });
   if (url.pathname === "/api/runs") return json(res, 200, { runs: scenario === "empty" ? [] : runs });
 
   if (url.pathname === "/api/config") {

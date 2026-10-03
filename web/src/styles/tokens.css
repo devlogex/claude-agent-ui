@@ -217,7 +217,11 @@
      normal majority, and thirty amber rows would drown the one task parked on a permission
      prompt — which inverts the hierarchy this screen exists to show. A queued task needs
      nothing from anybody, so it must not out-shout one that does. */
-  --status-queued-fg: var(--blue-400);
+  /* blue-300, not blue-400: on a *selected* table row the tint sits over a lighter surface and
+     blue-400 falls to 4.20:1. Queued and Scheduled therefore share a hue, which is the same
+     arrangement `waiting` and `blocked` already have — they are told apart by their label and
+     their icon, which is how every state in this app is told apart. */
+  --status-queued-fg: var(--blue-300);
   --status-queued-bg: color-mix(in oklab, var(--blue-500) 18%, transparent);
   --status-scheduled-fg: var(--blue-300);
   --status-scheduled-bg: color-mix(in oklab, var(--blue-500) 18%, transparent);
@@ -332,10 +336,43 @@
   --badge-pad-x: var(--space-2);
   --badge-pad-y: var(--space-px);
 
+  /* Scope badge. Outlined and neutral on purpose: hue is reserved for state, so a scope is told
+     apart by its word and its icon rather than by a colour that would compete with a status. */
+  --scope-badge-fg: var(--color-fg-muted);
+  --scope-badge-bg: transparent;
+  --scope-badge-border: var(--color-border);
+
+  /* Definition editor. The file is the content, so it gets the sunken field surface and the
+     mono family; the chrome around it stays on the page surface. */
+  --editor-bg: var(--color-surface-sunken);
+  --editor-fg: var(--color-fg);
+  --editor-border: var(--color-border);
+  --editor-pad: var(--space-4);
+  --editor-leading: var(--leading-relaxed);
+  /* Field errors and the read-only explanation. Both are persistent strips, never toasts:
+     a problem with the file on disk does not stop being true after four seconds.
+
+     The foreground is the `failed` status pair rather than plain `--color-danger-fg`, for the
+     reason that pair exists: this text sits on a tinted background, not on the page, and
+     danger-fg only reaches 4.21:1 once the tint is flattened over a selected surface. The
+     border stays on --color-danger, which is non-text and only needs 3:1. */
+  --field-error-fg: var(--status-failed-fg);
+  --field-error-bg: var(--status-failed-bg);
+  --field-error-border: var(--color-danger);
+  --readonly-fg: var(--color-fg-muted);
+  --readonly-bg: var(--color-surface-raised);
+  --readonly-border: var(--color-border-strong);
+
   /* Button */
   --button-radius: var(--radius-md);
   --button-height-sm: var(--space-6);
   --button-height-md: var(--space-8);
+
+  /* Choice card — a radio with its consequence attached. Selected uses the same surface the
+     list rows use for selection, plus an accent border; an accent *tint* would have put
+     --color-fg-muted at 3.95:1 in dark, and the description is the part that has to be read. */
+  --choice-bg-selected: var(--color-surface-selected);
+  --choice-border-selected: var(--color-accent);
 
   /* Form controls. Native elements, styled — they are keyboard-reachable without a dependency. */
   --field-bg: var(--color-surface-sunken);

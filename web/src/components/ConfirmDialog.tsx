@@ -58,8 +58,11 @@ export function ConfirmDialog({
           )}
         >
           <AlertDialog.Title className="text-lg font-semibold text-fg">{title}</AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-sm leading-relaxed text-fg-muted">
-            {description}
+          {/* A div, not the default <p>: these descriptions run to two paragraphs when the thing
+              being destroyed needs more than one sentence, and a <p> inside a <p> is invalid
+              HTML that React warns about and the browser silently un-nests. */}
+          <AlertDialog.Description asChild>
+            <div className="mt-2 text-sm leading-relaxed text-fg-muted">{description}</div>
           </AlertDialog.Description>
           <div className="mt-6 flex justify-end gap-2">
             <AlertDialog.Cancel className={buttonVariants({ variant: "secondary", size: "md" })}>

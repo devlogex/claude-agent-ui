@@ -104,6 +104,20 @@ const PAIRS = [
 
 const STATUSES = ["running", "waiting", "queued", "scheduled", "finished", "failed", "idle"];
 
+/**
+ * Text that sits on a tinted strip rather than on a surface: the field-error summary in the
+ * definition editor, and the selected radio card in the task form. Both are `*-quiet` mixes, so
+ * the real background depends on whatever surface is underneath and has to be flattened first.
+ */
+const QUIET = [
+  // The inline error paragraph in a dialog or an editor pane. It is never drawn inside a
+  // selected row, so that surface is not in its list — checking a combination the app cannot
+  // produce would only invite someone to "fix" a colour that is already correct.
+  ["--color-danger-fg", "--color-danger-quiet", ["--color-bg", "--color-surface", "--color-surface-raised"]],
+  // ::selection, which can land on text over any surface.
+  ["--color-fg", "--color-accent-quiet", SURFACES],
+];
+
 const failures = [];
 let checked = 0;
 
@@ -125,6 +139,14 @@ for (const [themeName, theme] of Object.entries(THEMES)) {
 
   for (const [fgKey, bgKey] of PAIRS) {
     assert(themeName, `${fgKey} on ${bgKey}`, resolve(theme[fgKey], theme), resolve(theme[bgKey], theme), TEXT);
+  }
+
+  for (const [fgKey, quietKey, over] of QUIET) {
+    const fg = resolve(theme[fgKey], theme);
+    for (const surfaceKey of over) {
+      const bg = flatten(theme[quietKey], theme, resolve(theme[surfaceKey], theme));
+      assert(themeName, `${fgKey} on ${quietKey} over ${surfaceKey}`, fg, bg, TEXT);
+    }
   }
 
   for (const status of STATUSES) {
