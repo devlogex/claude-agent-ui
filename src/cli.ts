@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCli, execRunner } from "./claude/claudeCli.ts";
 import { ConfigError, USAGE, loadConfig, parseArgs } from "./config.ts";
+import type { TaskQueue } from "./domain/queue.ts";
 import { HOST, createApp } from "./server.ts";
 import { sweepTempFiles } from "./store/jsonStore.ts";
 import { type Lock, LockError, acquireLock } from "./store/lockfile.ts";
@@ -138,6 +139,8 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
     permissionMode: config.permissionMode,
     dataDir: config.dataDir,
     historyLimit: config.historyLimit,
+    concurrency: config.concurrency,
+    maxAttempts: config.maxAttempts,
   });
 
   const server = app.listen(config.port, HOST);
@@ -153,8 +156,16 @@ export async function main(argv = process.argv.slice(2)): Promise<Server | undef
   }
   // Covers every way the server goes down: close() from a test, a signal, or an unhandled throw
   // that unwinds to exit. release() is idempotent, so overlapping paths are harmless.
-  server.once("close", () => lock.release());
+  const tasks = app.locals.tasks as TaskQueue;
+  server.once("close", () => {
+    tasks.stop();
+    lock.release();
+  });
   process.once("exit", () => lock.release());
+
+  // Only once the port is ours: reconciles tasks stranded `running` by an earlier crash, then
+  // starts the worker loop. Background sessions outlive us, so a restart adopts them.
+  await tasks.start();
 
   const address = server.address();
   boundPort = typeof address === "object" && address ? address.port : config.port;

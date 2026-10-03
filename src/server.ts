@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCli, DEFAULT_PERMISSION_MODE, type PermissionMode } from "./claude/claudeCli.ts";
 import { discoverAgents, findAgent, toPublic } from "./domain/agents.ts";
 import { NEW_AGENT_TEMPLATE, ValidationError, createAgent, updateAgent } from "./domain/agentStore.ts";
+import { TaskError, TaskQueue } from "./domain/queue.ts";
 import { RunError, RunStore } from "./domain/runs.ts";
 import { EventBus } from "./events.ts";
 import { streamEvents } from "./sse.ts";
@@ -48,6 +49,11 @@ export interface AppOptions {
   permissionMode?: PermissionMode;
   dataDir?: string;
   historyLimit?: number;
+  /** How many tasks the queue runs at once, and how many attempts each one gets. */
+  concurrency?: number;
+  maxAttempts?: number;
+  /** How often the queue polls the CLI; tests drive `tick()` by hand instead. */
+  pollMs?: number;
   /** Directory holding the built web client; defaults to `web/` next to this module. */
   webRoot?: string;
   /** The bus /api/events streams; one is created when the caller does not supply it. */
@@ -63,11 +69,24 @@ export function createApp(opts: AppOptions) {
     historyLimit: opts.historyLimit,
     bus,
   });
+  const tasks = new TaskQueue(home, opts.cli, {
+    dataDir: opts.dataDir,
+    concurrency: opts.concurrency,
+    maxAttempts: opts.maxAttempts,
+    historyLimit: opts.historyLimit,
+    pollMs: opts.pollMs,
+    starterPrompt: opts.starterPrompt,
+    defaultCwd: opts.defaultCwd,
+    bus,
+  });
   const webRoot = opts.webRoot ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "web");
 
   const app = express();
-  // Published so later subsystems (the task queue, the scheduler) emit onto the same bus.
+  // Published so later subsystems (the scheduler) emit onto the same bus.
   app.locals.bus = bus;
+  // The caller owns the loop's lifetime: nothing starts work until start() is called, and
+  // shutdown has to stop it. Tests drive tick() directly and never start the interval.
+  app.locals.tasks = tasks;
   // Shutdown needs these: server.close() waits for open connections, and an SSE connection never
   // ends on its own, so something has to end them. See closeStreams below.
   const streams = new Set<() => void>();
@@ -154,6 +173,73 @@ export function createApp(opts: AppOptions) {
     }),
   );
 
+  app.get(
+    "/api/tasks",
+    wrap(async (_req, res) => {
+      res.json(await tasks.list());
+    }),
+  );
+
+  // Registered before "/api/tasks/:id/..." so "stats" is never read as a task id.
+  app.get(
+    "/api/tasks/stats",
+    wrap(async (_req, res) => {
+      res.json(await tasks.stats());
+    }),
+  );
+
+  app.post(
+    "/api/tasks",
+    wrap(async (req, res) => {
+      const agent = await findAgent(home, String(req.body?.agentId ?? ""));
+      if (!agent) throw new TaskError("agent not found", 404);
+      if (!agent.valid) throw new TaskError("agent file has invalid frontmatter; fix it before running", 400);
+      // Built field by field rather than spread: `scheduleId` belongs to the scheduler, and a
+      // request body must never be able to claim a task was created by one.
+      res.status(201).json(
+        await tasks.create({
+          agent: agent.runName,
+          cwd: req.body?.cwd,
+          prompt: req.body?.prompt,
+          title: req.body?.title,
+          permissionMode: req.body?.permissionMode,
+          unattended: req.body?.unattended,
+          priority: req.body?.priority,
+          maxAttempts: req.body?.maxAttempts,
+        }),
+      );
+    }),
+  );
+
+  app.patch(
+    "/api/tasks/:id",
+    wrap(async (req, res) => {
+      res.json(await tasks.update(String(req.params.id), { title: req.body?.title, priority: req.body?.priority }));
+    }),
+  );
+
+  app.post(
+    "/api/tasks/:id/cancel",
+    wrap(async (req, res) => {
+      res.json(await tasks.cancel(String(req.params.id)));
+    }),
+  );
+
+  // 201 with a new id: retry clones, so the row the user clicked keeps its history.
+  app.post(
+    "/api/tasks/:id/retry",
+    wrap(async (req, res) => {
+      res.status(201).json(await tasks.retry(String(req.params.id)));
+    }),
+  );
+
+  app.get(
+    "/api/tasks/:id/transcript",
+    wrap(async (req, res) => {
+      res.json(await tasks.transcript(String(req.params.id)));
+    }),
+  );
+
   app.post(
     "/api/runs/stop-finished",
     wrap(async (_req, res) => {
@@ -179,7 +265,7 @@ export function createApp(opts: AppOptions) {
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     const raw =
-      err instanceof ValidationError || err instanceof RunError
+      err instanceof ValidationError || err instanceof RunError || err instanceof TaskError
         ? err.status
         : ((err as any).status ?? (err as any).statusCode);
     const status = Number.isInteger(raw) && raw >= 400 && raw < 600 ? raw : 500;
